@@ -71,3 +71,31 @@
 | `internal/auth/oauth.go` | Create | auth |
 | `internal/auth/oauth_test.go` | Create | auth |
 | `go.mod` | Update | root (add go-keyring, x/oauth2) |
+
+## As-Built Notes
+
+### Plan deviations
+1. **Resolver signature changed**: `Resolve(ctx, auth, flagValue)` → `Resolve(ctx, auth, toolName, flagValue)` — added `toolName` parameter for error messages and keyring/store lookup key.
+2. **Login signature changed**: `Login(ctx, auth, openBrowser bool)` → `Login(ctx, LoginConfig)` — config struct for testability (HTTPClient, ListenAddr, Timeout, Store, OpenBrowser callback).
+3. **Refresh signature changed**: `Refresh(ctx, auth, stored)` → `Refresh(ctx, auth, stored, RefreshConfig)` — added config struct for HTTPClient, Store, ToolName, Endpoint.
+4. **TokenStore interface added**: `TokenStore` interface (`Get(key) (*StoredToken, error)`) defined in resolver.go — both KeyringStore and FileStore implement it. This enables mock injection in tests (Constitution rule 3).
+5. **WritableTokenStore interface added**: Extends TokenStore with `Set(key, token) error` — used by Login and Refresh to persist tokens.
+6. **Keyring interface**: `KeyringStore` accepts a `Keyring` interface (not concrete go-keyring) for testability. Tests use a `fakeKeyring` map-based implementation.
+7. **go-keyring not in go.mod yet**: The `Keyring` interface decouples the package from go-keyring. The actual go-keyring dependency will be wired when the CLI layer creates the real KeyringStore.
+
+### Review findings (non-blocking)
+1. **WARN**: `fetchDiscoveryDoc` uses `http.DefaultClient` — discovery doesn't respect custom HTTP clients. Will be addressed in CLI layer.
+2. **WARN**: `ListenAddr` default "127.0.0.1:8085" documented but not enforced in `Login` — caller must set it.
+
+### Actual files
+| File | Lines | Tests |
+|------|-------|-------|
+| `internal/auth/types.go` | ~30 | 33 tests in types_test.go |
+| `internal/auth/keyring.go` | ~60 | 25 tests in keyring_test.go |
+| `internal/auth/store.go` | ~150 | 39 tests in store_test.go |
+| `internal/auth/resolver.go` | ~65 | 42 tests in resolver_test.go |
+| `internal/auth/oauth.go` | ~240 | 66 tests in oauth_test.go (discovery + login + refresh) |
+
+### Test summary
+- Total: 216 tests across auth package
+- All pass, `go vet` clean, `go build` clean
