@@ -2,15 +2,174 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 	"golang.org/x/oauth2"
 )
+
+// WritableTokenStore extends TokenStore with a Set method for persisting tokens.
+// Both KeyringStore and FileStore satisfy this interface.
+type WritableTokenStore interface {
+	TokenStore
+	Set(key string, token StoredToken) error
+}
+
+// LoginConfig holds all configuration for an OAuth PKCE login flow.
+type LoginConfig struct {
+	Auth        manifest.Auth
+	ToolName    string
+	ClientID    string
+	HTTPClient  *http.Client // for testing — mock the token exchange
+	OpenBrowser func(string) error
+	ListenAddr  string        // default "127.0.0.1:8085", for testing use ":0"
+	Timeout     time.Duration // default 120s
+	Store       WritableTokenStore
+}
+
+// Login performs an OAuth 2.0 Authorization Code flow with PKCE.
+// It starts a local callback server, opens the authorization URL in the browser,
+// waits for the callback, exchanges the code for a token, and stores the result.
+func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
+	// Inject custom HTTP client into context if provided.
+	if cfg.HTTPClient != nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
+	}
+
+	// Step 1: Discover endpoints.
+	endpoint, _, err := DiscoverEndpoints(ctx, cfg.Auth.ProviderURL, cfg.Auth.Endpoints)
+	if err != nil {
+		return nil, fmt.Errorf("discover OAuth endpoints: %w", err)
+	}
+
+	// Step 2: Generate PKCE verifier and random state.
+	verifier := oauth2.GenerateVerifier()
+
+	stateBytes := make([]byte, 32)
+	if _, err := rand.Read(stateBytes); err != nil {
+		return nil, fmt.Errorf("generate state: %w", err)
+	}
+	state := base64.RawURLEncoding.EncodeToString(stateBytes)
+
+	// Step 3: Start callback HTTP server.
+	// Try the configured address first; if it fails, fall back to a random port.
+	ln, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		ln, err = net.Listen("tcp", ":0")
+		if err != nil {
+			return nil, fmt.Errorf("start callback server: %w", err)
+		}
+	}
+
+	// Step 4: Build redirect URI from actual server address.
+	port := ln.Addr().(*net.TCPAddr).Port
+	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+
+	// Step 5: Create oauth2.Config.
+	oauthCfg := &oauth2.Config{
+		ClientID:    cfg.ClientID,
+		Scopes:      cfg.Auth.Scopes,
+		Endpoint:    *endpoint,
+		RedirectURL: redirectURI,
+	}
+
+	// Step 6: Build auth URL with PKCE challenge and state.
+	authURL := oauthCfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
+
+	// Step 7: Channel to receive the callback result.
+	type callbackResult struct {
+		code string
+		err  error
+	}
+	resultCh := make(chan callbackResult, 1)
+
+	// Step 8: Start callback server.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		code := q.Get("code")
+		receivedState := q.Get("state")
+
+		if receivedState != state {
+			http.Error(w, "Security check failed (state mismatch)", http.StatusBadRequest)
+			resultCh <- callbackResult{err: fmt.Errorf("Security check failed (state mismatch)")}
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html><body>Login successful. You may close this window.</body></html>"))
+		resultCh <- callbackResult{code: code}
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() {
+		_ = server.Serve(ln)
+	}()
+
+	// Ensure the server shuts down when we return.
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+
+	// Step 9: Open browser.
+	if err := cfg.OpenBrowser(authURL); err != nil {
+		return nil, fmt.Errorf("open browser: %w", err)
+	}
+
+	// Step 10: Wait for callback or timeout.
+	timeout := cfg.Timeout
+	if timeout == 0 {
+		timeout = 120 * time.Second
+	}
+
+	var cbResult callbackResult
+	select {
+	case cbResult = <-resultCh:
+		// Got callback.
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("Login cancelled or timed out")
+	case <-ctx.Done():
+		return nil, fmt.Errorf("login cancelled: %w", ctx.Err())
+	}
+
+	if cbResult.err != nil {
+		return nil, cbResult.err
+	}
+
+	// Step 11: Exchange code for token.
+	token, err := oauthCfg.Exchange(ctx, cbResult.code, oauth2.VerifierOption(verifier))
+	if err != nil {
+		return nil, fmt.Errorf("exchange authorization code: %w", err)
+	}
+
+	// Step 12: Convert to StoredToken.
+	stored := &StoredToken{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		TokenType:    token.TokenType,
+		Expiry:       token.Expiry,
+	}
+
+	// Step 13: Persist to store if provided.
+	if cfg.Store != nil {
+		if err := cfg.Store.Set(cfg.ToolName, *stored); err != nil {
+			return nil, fmt.Errorf("store token: %w", err)
+		}
+	}
+
+	return stored, nil
+}
 
 // discoveryDoc is the minimal set of fields we parse from a well-known
 // discovery document (RFC 8414 or OIDC).

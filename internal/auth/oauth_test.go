@@ -2,14 +2,22 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 	"github.com/stretchr/testify/assert"
@@ -1056,4 +1064,1497 @@ func TestDiscoverEndpoints_UsesGETMethod(t *testing.T) {
 		assert.Equal(t, http.MethodGet, method,
 			"Discovery requests must use GET method, got %q", method)
 	}
+}
+
+// ===========================================================================
+// AC-14, AC-15, AC-16: OAuth PKCE Login flow tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test helpers for Login tests
+// ---------------------------------------------------------------------------
+
+// fakeWritableTokenStore implements WritableTokenStore for Login tests.
+type fakeWritableTokenStore struct {
+	tokens map[string]StoredToken
+}
+
+func newFakeWritableTokenStore() *fakeWritableTokenStore {
+	return &fakeWritableTokenStore{
+		tokens: make(map[string]StoredToken),
+	}
+}
+
+func (f *fakeWritableTokenStore) Get(key string) (*StoredToken, error) {
+	tok, ok := f.tokens[key]
+	if !ok {
+		return nil, fmt.Errorf("token not found for key %q", key)
+	}
+	copy := tok
+	return &copy, nil
+}
+
+func (f *fakeWritableTokenStore) Set(key string, token StoredToken) error {
+	f.tokens[key] = token
+	return nil
+}
+
+// Compile-time interface checks.
+var _ WritableTokenStore = (*fakeWritableTokenStore)(nil)
+var _ WritableTokenStore = (*KeyringStore)(nil)
+var _ WritableTokenStore = (*FileStore)(nil)
+
+// newMockOAuthServer creates an httptest.Server that acts as a mock OAuth
+// provider. It serves:
+//   - /.well-known/oauth-authorization-server  (discovery)
+//   - /authorize                                (auth endpoint -- not actually hit by Login)
+//   - /token                                    (token exchange)
+//
+// The token endpoint validates that code_verifier is present in the request
+// and returns a configurable token response.
+//
+// tokenValidator is called with the token request's form values so tests can
+// inspect the exchange request. If tokenValidator returns an error, the token
+// endpoint returns a 400.
+type tokenExchangeLog struct {
+	CodeVerifier string
+	Code         string
+	GrantType    string
+	RedirectURI  string
+	ClientID     string
+}
+
+func newMockOAuthServer(t *testing.T, tokenValidator func(log tokenExchangeLog) error) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	// We need to know the server URL to build the discovery response, but
+	// we don't know it until after httptest.NewServer. Use a pointer that
+	// gets set right after.
+	var serverURL string
+
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"authorization_endpoint": %q,
+			"token_endpoint": %q
+		}`, serverURL+"/authorize", serverURL+"/token")
+	})
+
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, `{"error": "invalid_request"}`)
+			return
+		}
+
+		log := tokenExchangeLog{
+			CodeVerifier: r.FormValue("code_verifier"),
+			Code:         r.FormValue("code"),
+			GrantType:    r.FormValue("grant_type"),
+			RedirectURI:  r.FormValue("redirect_uri"),
+			ClientID:     r.FormValue("client_id"),
+		}
+
+		if tokenValidator != nil {
+			if err := tokenValidator(log); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, `{"error": %q}`, err.Error())
+				return
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"access_token": "mock-access-token-xyz",
+			"refresh_token": "mock-refresh-token-abc",
+			"token_type": "Bearer",
+			"expires_in": 3600
+		}`)
+	})
+
+	srv := httptest.NewServer(mux)
+	serverURL = srv.URL
+	return srv
+}
+
+// simulateCallback parses the auth URL captured from openBrowser, extracts
+// the state parameter, and makes an HTTP GET to the callback server with
+// the authorization code and matching state. Returns an error if any step fails.
+func simulateCallback(t *testing.T, authURL string, code string, stateOverride *string) error {
+	t.Helper()
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		return fmt.Errorf("parsing auth URL: %w", err)
+	}
+
+	state := parsed.Query().Get("state")
+	if stateOverride != nil {
+		state = *stateOverride
+	}
+
+	// Extract the redirect_uri from the auth URL to know where the callback server is.
+	redirectURI := parsed.Query().Get("redirect_uri")
+	if redirectURI == "" {
+		return fmt.Errorf("auth URL missing redirect_uri parameter")
+	}
+
+	callbackURL := fmt.Sprintf("%s?code=%s&state=%s", redirectURI, url.QueryEscape(code), url.QueryEscape(state))
+	resp, err := http.Get(callbackURL)
+	if err != nil {
+		return fmt.Errorf("GET callback: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("callback returned %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// defaultLoginConfig creates a LoginConfig suitable for testing. It uses:
+//   - ListenAddr ":0" to avoid port conflicts
+//   - A short timeout (5s) to catch hangs
+//   - The provided mock server URL as the provider
+//   - A channel-based openBrowser to capture the auth URL
+func defaultLoginConfig(providerURL string, store WritableTokenStore, authURLCh chan<- string) LoginConfig {
+	return LoginConfig{
+		Auth: manifest.Auth{
+			Type:        "oauth",
+			ProviderURL: providerURL,
+			Scopes:      []string{"read", "write"},
+		},
+		ToolName:   "test-tool",
+		ClientID:   "test-client-id",
+		ListenAddr: ":0",
+		Timeout:    5 * time.Second,
+		Store:      store,
+		OpenBrowser: func(u string) error {
+			authURLCh <- u
+			return nil
+		},
+	}
+}
+
+// runLoginAndSimulateCallback starts Login in a goroutine, waits for the
+// auth URL, simulates the callback with the given code, and returns the
+// Login result. This is the common pattern for happy-path tests.
+func runLoginAndSimulateCallback(t *testing.T, ctx context.Context, cfg LoginConfig, authURLCh <-chan string, code string) (*StoredToken, error) {
+	t.Helper()
+
+	var result *StoredToken
+	var loginErr error
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		result, loginErr = Login(ctx, cfg)
+	}()
+
+	// Wait for the auth URL from the browser callback.
+	select {
+	case authURL := <-authURLCh:
+		err := simulateCallback(t, authURL, code, nil)
+		if err != nil {
+			t.Fatalf("simulateCallback failed: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser to be called")
+	}
+
+	// Wait for Login to complete.
+	select {
+	case <-done:
+		// ok
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Login to complete")
+	}
+
+	return result, loginErr
+}
+
+// ---------------------------------------------------------------------------
+// AC-14: OAuth login performs PKCE flow
+// ---------------------------------------------------------------------------
+
+func TestLogin_FullPKCEFlow_ReturnsToken(t *testing.T) {
+	// AC-14: Complete login flow. Start login, capture auth URL, simulate
+	// callback with correct state, verify token returned with correct fields.
+	var exchangeLog tokenExchangeLog
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		exchangeLog = log
+		return nil
+	})
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-auth-code")
+
+	require.NoError(t, err, "Login must succeed for a valid PKCE flow")
+	require.NotNil(t, result, "Login must return a non-nil StoredToken")
+
+	// Verify the returned token has the values from our mock server's response.
+	assert.Equal(t, "mock-access-token-xyz", result.AccessToken,
+		"AccessToken must match the mock server's response")
+	assert.Equal(t, "mock-refresh-token-abc", result.RefreshToken,
+		"RefreshToken must match the mock server's response")
+	assert.Equal(t, "Bearer", result.TokenType,
+		"TokenType must match the mock server's response")
+
+	// Verify the token exchange included a code_verifier (PKCE).
+	assert.NotEmpty(t, exchangeLog.CodeVerifier,
+		"Token exchange must include a code_verifier parameter (PKCE)")
+}
+
+func TestLogin_AuthURL_HasS256CodeChallenge(t *testing.T) {
+	// AC-14: Auth URL must include code_challenge with S256 method.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	var authURL string
+	select {
+	case authURL = <-authURLCh:
+		// Got it
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser to be called")
+	}
+
+	parsed, err := url.Parse(authURL)
+	require.NoError(t, err, "auth URL must be parseable")
+
+	q := parsed.Query()
+
+	// code_challenge must be present and non-empty.
+	codeChallenge := q.Get("code_challenge")
+	assert.NotEmpty(t, codeChallenge,
+		"Auth URL must contain a non-empty code_challenge parameter")
+
+	// code_challenge_method must be "S256".
+	codeChallengeMethod := q.Get("code_challenge_method")
+	assert.Equal(t, "S256", codeChallengeMethod,
+		"Auth URL must use code_challenge_method=S256, got %q", codeChallengeMethod)
+
+	// Simulate callback to let Login complete and avoid goroutine leak.
+	_ = simulateCallback(t, authURL, "cleanup-code", nil)
+	<-done
+}
+
+func TestLogin_AuthURL_HasNonEmptyState(t *testing.T) {
+	// AC-14: Auth URL must include a state parameter that is non-empty.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	var authURL string
+	select {
+	case authURL = <-authURLCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser to be called")
+	}
+
+	parsed, err := url.Parse(authURL)
+	require.NoError(t, err)
+
+	state := parsed.Query().Get("state")
+	assert.NotEmpty(t, state, "Auth URL must include a non-empty state parameter")
+
+	// State should have sufficient entropy — at least 16 characters.
+	assert.GreaterOrEqual(t, len(state), 16,
+		"State parameter must have sufficient entropy (at least 16 chars), got %d", len(state))
+
+	_ = simulateCallback(t, authURL, "cleanup-code", nil)
+	<-done
+}
+
+func TestLogin_StateIsRandomPerCall(t *testing.T) {
+	// AC-14: Each Login invocation must generate a unique state to prevent
+	// CSRF attacks. A hardcoded state would fail this test.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	states := make([]string, 3)
+
+	for i := 0; i < 3; i++ {
+		store := newFakeWritableTokenStore()
+		authURLCh := make(chan string, 1)
+		cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+		ctx := context.Background()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = Login(ctx, cfg)
+		}()
+
+		select {
+		case authURL := <-authURLCh:
+			parsed, err := url.Parse(authURL)
+			require.NoError(t, err)
+			states[i] = parsed.Query().Get("state")
+			_ = simulateCallback(t, authURL, "code", nil)
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for openBrowser")
+		}
+		<-done
+	}
+
+	// All three states must be distinct.
+	assert.NotEqual(t, states[0], states[1],
+		"State must be randomly generated per call (call 0 vs 1)")
+	assert.NotEqual(t, states[1], states[2],
+		"State must be randomly generated per call (call 1 vs 2)")
+	assert.NotEqual(t, states[0], states[2],
+		"State must be randomly generated per call (call 0 vs 2)")
+}
+
+func TestLogin_CodeExchangeIncludesVerifier(t *testing.T) {
+	// AC-14: The token exchange request must include code_verifier param.
+	// The verifier must be non-empty and have sufficient length (per RFC 7636,
+	// between 43 and 128 characters).
+	var capturedVerifier string
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		capturedVerifier = log.CodeVerifier
+		if log.CodeVerifier == "" {
+			return fmt.Errorf("missing code_verifier")
+		}
+		return nil
+	})
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	require.NoError(t, err, "Login must succeed when token endpoint accepts the verifier")
+
+	// RFC 7636 Section 4.1: verifier is 43-128 characters.
+	assert.GreaterOrEqual(t, len(capturedVerifier), 43,
+		"code_verifier must be at least 43 characters (RFC 7636), got %d", len(capturedVerifier))
+	assert.LessOrEqual(t, len(capturedVerifier), 128,
+		"code_verifier must be at most 128 characters (RFC 7636), got %d", len(capturedVerifier))
+}
+
+func TestLogin_CodeChallengeMatchesVerifier(t *testing.T) {
+	// AC-14: The code_challenge in the auth URL must be the S256 hash of
+	// the code_verifier sent in the token exchange. This is the core PKCE
+	// security property.
+	var capturedVerifier string
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		capturedVerifier = log.CodeVerifier
+		return nil
+	})
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	var capturedChallenge string
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+		capturedChallenge = parsed.Query().Get("code_challenge")
+		_ = simulateCallback(t, authURL, "test-code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+
+	require.NotEmpty(t, capturedVerifier, "must have captured code_verifier")
+	require.NotEmpty(t, capturedChallenge, "must have captured code_challenge")
+
+	// Compute expected S256 challenge from the verifier.
+	hash := sha256.Sum256([]byte(capturedVerifier))
+	expectedChallenge := base64.RawURLEncoding.EncodeToString(hash[:])
+
+	assert.Equal(t, expectedChallenge, capturedChallenge,
+		"code_challenge must be base64url(SHA256(code_verifier))")
+}
+
+func TestLogin_TokenStoredInStore(t *testing.T) {
+	// AC-14: The resulting token must be stored in the token store.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify the token was stored under the tool name.
+	stored, err := store.Get("test-tool")
+	require.NoError(t, err, "Token must be stored in the store under the tool name")
+	require.NotNil(t, stored)
+
+	assert.Equal(t, result.AccessToken, stored.AccessToken,
+		"Stored token's AccessToken must match the returned token")
+	assert.Equal(t, result.RefreshToken, stored.RefreshToken,
+		"Stored token's RefreshToken must match the returned token")
+	assert.Equal(t, result.TokenType, stored.TokenType,
+		"Stored token's TokenType must match the returned token")
+}
+
+func TestLogin_TokenFieldsPopulated(t *testing.T) {
+	// AC-14: Returned token must have AccessToken, RefreshToken, and Expiry
+	// populated from the OAuth response. Expiry should be approximately
+	// now + expires_in seconds.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	beforeLogin := time.Now()
+	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	afterLogin := time.Now()
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, "mock-access-token-xyz", result.AccessToken)
+	assert.Equal(t, "mock-refresh-token-abc", result.RefreshToken)
+
+	// Expiry should be approximately now + 3600 seconds (from mock response).
+	// Allow a 30-second window to account for test execution time.
+	assert.False(t, result.Expiry.IsZero(), "Expiry must not be zero when expires_in is provided")
+	expectedEarliestExpiry := beforeLogin.Add(3600 * time.Second)
+	expectedLatestExpiry := afterLogin.Add(3600 * time.Second)
+	assert.True(t, result.Expiry.After(expectedEarliestExpiry.Add(-30*time.Second)),
+		"Expiry %v should be approximately now+3600s, earliest acceptable: %v",
+		result.Expiry, expectedEarliestExpiry.Add(-30*time.Second))
+	assert.True(t, result.Expiry.Before(expectedLatestExpiry.Add(30*time.Second)),
+		"Expiry %v should be approximately now+3600s, latest acceptable: %v",
+		result.Expiry, expectedLatestExpiry.Add(30*time.Second))
+}
+
+func TestLogin_AuthURL_ContainsClientID(t *testing.T) {
+	// The auth URL must contain the client_id parameter matching cfg.ClientID.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.ClientID = "my-specific-client-id"
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+		assert.Equal(t, "my-specific-client-id", parsed.Query().Get("client_id"),
+			"Auth URL must include the configured client_id")
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+}
+
+func TestLogin_AuthURL_ContainsScopes(t *testing.T) {
+	// Auth URL must include scopes from the Auth config.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.Auth.Scopes = []string{"openid", "profile", "email"}
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+
+		scopeParam := parsed.Query().Get("scope")
+		assert.NotEmpty(t, scopeParam, "Auth URL must include a scope parameter")
+
+		// Verify all configured scopes are present.
+		for _, s := range []string{"openid", "profile", "email"} {
+			assert.Contains(t, scopeParam, s,
+				"Auth URL scope parameter must contain %q", s)
+		}
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+}
+
+func TestLogin_AuthURL_ResponseTypeIsCode(t *testing.T) {
+	// The auth URL must request response_type=code for authorization code flow.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+		assert.Equal(t, "code", parsed.Query().Get("response_type"),
+			"Auth URL must have response_type=code")
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+}
+
+// ---------------------------------------------------------------------------
+// AC-15: OAuth callback server handles errors
+// ---------------------------------------------------------------------------
+
+func TestLogin_StateMismatch_ReturnsError(t *testing.T) {
+	// AC-15: State mismatch on callback must return an error containing
+	// "state mismatch".
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, loginErr = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		// Simulate callback with a WRONG state.
+		wrongState := "completely-wrong-state-value"
+		err := simulateCallback(t, authURL, "test-code", &wrongState)
+		// The callback itself might return an error response, that's fine.
+		_ = err
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Login to complete after state mismatch")
+	}
+
+	require.Error(t, loginErr, "Login must return error on state mismatch")
+	assert.Contains(t, loginErr.Error(), "state mismatch",
+		"Error must contain 'state mismatch', got: %q", loginErr.Error())
+}
+
+func TestLogin_Timeout_ReturnsError(t *testing.T) {
+	// AC-15: No callback within the timeout period must return an error
+	// containing "timed out".
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.Timeout = 200 * time.Millisecond // Very short timeout for testing.
+	ctx := context.Background()
+
+	var result *StoredToken
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, loginErr = Login(ctx, cfg)
+	}()
+
+	// Wait for the browser to be called but do NOT simulate the callback.
+	select {
+	case <-authURLCh:
+		// Intentionally do nothing — let it time out.
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser to be called")
+	}
+
+	// Wait for Login to complete (should be after 200ms timeout).
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Login did not return after timeout; possible goroutine leak")
+	}
+
+	require.Error(t, loginErr, "Login must return error when callback times out")
+	assert.Contains(t, loginErr.Error(), "timed out",
+		"Timeout error must contain 'timed out', got: %q", loginErr.Error())
+	assert.Nil(t, result, "Result must be nil on timeout")
+}
+
+func TestLogin_CallbackServerShutsDown_AfterSuccess(t *testing.T) {
+	// AC-15: After successful callback, the callback server must stop
+	// accepting connections.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	var authURL string
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL = <-authURLCh:
+		_ = simulateCallback(t, authURL, "test-code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+
+	<-done
+
+	// Extract the redirect URI (callback server address) from the auth URL.
+	parsed, err := url.Parse(authURL)
+	require.NoError(t, err)
+	redirectURI := parsed.Query().Get("redirect_uri")
+	require.NotEmpty(t, redirectURI, "auth URL must have redirect_uri")
+
+	// Attempt another connection to the callback server — it should fail.
+	// Give it a short time to shut down.
+	time.Sleep(100 * time.Millisecond)
+	client := &http.Client{Timeout: 1 * time.Second}
+	_, err = client.Get(redirectURI + "?code=sneaky&state=bad")
+	assert.Error(t, err,
+		"Callback server must be shut down after successful callback; expected connection error")
+}
+
+func TestLogin_CallbackServerShutsDown_AfterTimeout(t *testing.T) {
+	// AC-15: After timeout, the callback server must also shut down.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.Timeout = 200 * time.Millisecond
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	var authURL string
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL = <-authURLCh:
+		// Don't callback — let it time out.
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+
+	<-done
+
+	// The callback server should be shut down.
+	parsed, err := url.Parse(authURL)
+	require.NoError(t, err)
+	redirectURI := parsed.Query().Get("redirect_uri")
+	require.NotEmpty(t, redirectURI)
+
+	time.Sleep(100 * time.Millisecond)
+	client := &http.Client{Timeout: 1 * time.Second}
+	_, err = client.Get(redirectURI + "?code=late&state=late")
+	assert.Error(t, err,
+		"Callback server must be shut down after timeout")
+}
+
+// ---------------------------------------------------------------------------
+// AC-16: OAuth callback server port selection
+// ---------------------------------------------------------------------------
+
+func TestLogin_ListenAddr_UsesSpecifiedAddr(t *testing.T) {
+	// AC-16: When ListenAddr is ":0", server starts on a random port.
+	// The redirect_uri in the auth URL must reflect the actual port.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.ListenAddr = ":0"
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+
+		redirectURI := parsed.Query().Get("redirect_uri")
+		require.NotEmpty(t, redirectURI, "Auth URL must have redirect_uri")
+
+		redirectParsed, err := url.Parse(redirectURI)
+		require.NoError(t, err)
+
+		port := redirectParsed.Port()
+		assert.NotEmpty(t, port, "redirect_uri must include a port")
+		assert.NotEqual(t, "0", port, "redirect_uri must use the actual port, not 0")
+
+		// Port should be a valid number.
+		portNum, err := strconv.Atoi(port)
+		require.NoError(t, err, "Port must be a valid number")
+		assert.Greater(t, portNum, 0, "Port must be greater than 0")
+		assert.LessOrEqual(t, portNum, 65535, "Port must be a valid TCP port")
+
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+}
+
+func TestLogin_RedirectURI_ReflectsActualPort(t *testing.T) {
+	// AC-16: The redirect_uri in the auth URL must be reachable (i.e., it
+	// reflects the actual port the server is listening on).
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.ListenAddr = ":0"
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+
+		redirectURI := parsed.Query().Get("redirect_uri")
+		require.NotEmpty(t, redirectURI)
+
+		// The redirect_uri must point to 127.0.0.1 or localhost.
+		redirectParsed, err := url.Parse(redirectURI)
+		require.NoError(t, err)
+		hostname := redirectParsed.Hostname()
+		assert.True(t,
+			hostname == "127.0.0.1" || hostname == "localhost",
+			"redirect_uri must point to localhost or 127.0.0.1, got %q", hostname)
+
+		// The callback must actually be reachable at this URL.
+		state := parsed.Query().Get("state")
+		callbackURL := fmt.Sprintf("%s?code=test&state=%s", redirectURI, url.QueryEscape(state))
+		resp, err := http.Get(callbackURL)
+		require.NoError(t, err, "Callback server must be reachable at the redirect_uri")
+		resp.Body.Close()
+		assert.Less(t, resp.StatusCode, 500,
+			"Callback server must respond without 5xx errors")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+}
+
+func TestLogin_DefaultListenAddr_FallbackOnPortConflict(t *testing.T) {
+	// AC-16: When the default port (8085) is in use, Login should fall back
+	// to an OS-assigned port. We simulate this by occupying port 8085.
+	//
+	// Occupy port 8085 to force fallback.
+	blocker, err := net.Listen("tcp", "127.0.0.1:8085")
+	if err != nil {
+		t.Skip("cannot occupy port 8085 for testing; port already in use by another process")
+	}
+	defer blocker.Close()
+
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.ListenAddr = "127.0.0.1:8085" // Explicitly request the blocked port.
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+
+		redirectURI := parsed.Query().Get("redirect_uri")
+		require.NotEmpty(t, redirectURI)
+
+		redirectParsed, err := url.Parse(redirectURI)
+		require.NoError(t, err)
+
+		port := redirectParsed.Port()
+		assert.NotEmpty(t, port, "redirect_uri must have a port")
+		assert.NotEqual(t, "8085", port,
+			"When port 8085 is occupied, Login must fall back to a different port, got 8085")
+
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for openBrowser -- Login may have failed to bind a port")
+	}
+	<-done
+}
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+func TestLogin_ContextCancellation_ReturnsError(t *testing.T) {
+	// Edge case: Cancelling the context before the callback should cause
+	// Login to return an error.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.Timeout = 10 * time.Second // Long timeout so cancellation beats it.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, loginErr = Login(ctx, cfg)
+	}()
+
+	// Wait for the browser to be called, then cancel the context.
+	select {
+	case <-authURLCh:
+		cancel()
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("timed out waiting for openBrowser")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Login did not return after context cancellation")
+	}
+
+	require.Error(t, loginErr, "Login must return error when context is cancelled")
+}
+
+func TestLogin_OpenBrowserCalledWithWellFormedURL(t *testing.T) {
+	// Edge case: The URL passed to openBrowser must be a valid, well-formed URL.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err, "URL passed to openBrowser must be parseable")
+
+		// Must have a scheme.
+		assert.True(t, parsed.Scheme == "http" || parsed.Scheme == "https",
+			"Auth URL must have http or https scheme, got %q", parsed.Scheme)
+		// Must have a host.
+		assert.NotEmpty(t, parsed.Host, "Auth URL must have a host")
+		// Must have required OAuth parameters.
+		q := parsed.Query()
+		assert.NotEmpty(t, q.Get("response_type"), "Auth URL must have response_type")
+		assert.NotEmpty(t, q.Get("client_id"), "Auth URL must have client_id")
+		assert.NotEmpty(t, q.Get("redirect_uri"), "Auth URL must have redirect_uri")
+		assert.NotEmpty(t, q.Get("state"), "Auth URL must have state")
+		assert.NotEmpty(t, q.Get("code_challenge"), "Auth URL must have code_challenge")
+		assert.NotEmpty(t, q.Get("code_challenge_method"), "Auth URL must have code_challenge_method")
+
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+}
+
+func TestLogin_OpenBrowserError_LoginFails(t *testing.T) {
+	// Edge case: If openBrowser returns an error, Login must propagate it.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	browserErr := fmt.Errorf("xdg-open: command not found")
+	cfg := LoginConfig{
+		Auth: manifest.Auth{
+			Type:        "oauth",
+			ProviderURL: srv.URL,
+			Scopes:      []string{"read"},
+		},
+		ToolName:   "test-tool",
+		ClientID:   "test-client-id",
+		ListenAddr: ":0",
+		Timeout:    5 * time.Second,
+		Store:      store,
+		OpenBrowser: func(u string) error {
+			return browserErr
+		},
+	}
+
+	result, err := Login(context.Background(), cfg)
+	require.Error(t, err, "Login must return error when openBrowser fails")
+	assert.Nil(t, result, "Result must be nil when openBrowser fails")
+	assert.Contains(t, err.Error(), "xdg-open",
+		"Error should contain the browser error message")
+}
+
+func TestLogin_TokenExchangeError_LoginFails(t *testing.T) {
+	// Edge case: Token exchange failure should propagate as a Login error.
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		return fmt.Errorf("invalid_grant: authorization code expired")
+	})
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, loginErr = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		_ = simulateCallback(t, authURL, "test-code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+
+	<-done
+	require.Error(t, loginErr, "Login must return error when token exchange fails")
+}
+
+func TestLogin_GrantTypeIsAuthorizationCode(t *testing.T) {
+	// The token exchange must use grant_type=authorization_code.
+	var capturedGrantType string
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		capturedGrantType = log.GrantType
+		return nil
+	})
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	require.NoError(t, err)
+
+	assert.Equal(t, "authorization_code", capturedGrantType,
+		"Token exchange must use grant_type=authorization_code")
+}
+
+func TestLogin_TokenExchangeIncludesCode(t *testing.T) {
+	// The authorization code from the callback must be forwarded to the
+	// token exchange.
+	var capturedCode string
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		capturedCode = log.Code
+		return nil
+	})
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "my-unique-auth-code-12345")
+	require.NoError(t, err)
+
+	assert.Equal(t, "my-unique-auth-code-12345", capturedCode,
+		"Token exchange must forward the exact authorization code from the callback")
+}
+
+func TestLogin_TokenExchangeIncludesRedirectURI(t *testing.T) {
+	// The token exchange must include redirect_uri matching the one from
+	// the authorization request.
+	var capturedRedirectURI string
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		capturedRedirectURI = log.RedirectURI
+		return nil
+	})
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	var authRedirectURI string
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+		authRedirectURI = parsed.Query().Get("redirect_uri")
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+
+	assert.NotEmpty(t, capturedRedirectURI, "Token exchange must include redirect_uri")
+	assert.Equal(t, authRedirectURI, capturedRedirectURI,
+		"Token exchange redirect_uri must match the one from the auth URL")
+}
+
+func TestLogin_TokenWithNoRefreshToken(t *testing.T) {
+	// Edge case: Some OAuth providers don't return a refresh_token.
+	// Login should still succeed.
+	mux := http.NewServeMux()
+	var srvURL string
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"authorization_endpoint": %q,
+			"token_endpoint": %q
+		}`, srvURL+"/authorize", srvURL+"/token")
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// No refresh_token in response.
+		fmt.Fprintf(w, `{
+			"access_token": "access-no-refresh",
+			"token_type": "Bearer",
+			"expires_in": 1800
+		}`)
+	})
+	oauthSrv := httptest.NewServer(mux)
+	srvURL = oauthSrv.URL
+	defer oauthSrv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(oauthSrv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+	require.NoError(t, err, "Login must succeed even without a refresh_token")
+	require.NotNil(t, result)
+
+	assert.Equal(t, "access-no-refresh", result.AccessToken)
+	assert.Empty(t, result.RefreshToken,
+		"RefreshToken should be empty when server doesn't return one")
+}
+
+func TestLogin_DiscoverEndpointsIntegration(t *testing.T) {
+	// Integration test: Login must use DiscoverEndpoints to find the token
+	// endpoint from the provider URL. If the discovery fails, Login should
+	// fail too.
+	mux := http.NewServeMux()
+	// Serve NO discovery documents — all well-known paths return 404.
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	// No manual endpoints either.
+	cfg.Auth.Endpoints = nil
+	ctx := context.Background()
+
+	result, err := Login(ctx, cfg)
+	require.Error(t, err, "Login must fail when endpoint discovery fails")
+	assert.Nil(t, result, "Result must be nil when discovery fails")
+}
+
+func TestLogin_ManualEndpoints_UsedWhenDiscoveryFails(t *testing.T) {
+	// When discovery fails but manual endpoints are provided, Login should
+	// use the manual endpoints successfully.
+	mux := http.NewServeMux()
+	var srvURL string
+
+	// This server has no well-known endpoints, but does have a /token endpoint.
+	mux.HandleFunc("/manual-token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"access_token": "manual-endpoint-token",
+			"refresh_token": "manual-refresh",
+			"token_type": "Bearer",
+			"expires_in": 3600
+		}`)
+	})
+	srv := httptest.NewServer(mux)
+	srvURL = srv.URL
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.Auth.Endpoints = &manifest.Endpoints{
+		Authorization: srvURL + "/manual-authorize",
+		Token:         srvURL + "/manual-token",
+	}
+	ctx := context.Background()
+
+	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+	require.NoError(t, err, "Login must succeed with manual endpoints")
+	require.NotNil(t, result)
+	assert.Equal(t, "manual-endpoint-token", result.AccessToken)
+}
+
+func TestLogin_HTTPClientUsedForTokenExchange(t *testing.T) {
+	// When HTTPClient is set, it should be used for the token exchange,
+	// allowing tests to intercept the request. This verifies the test
+	// seam works correctly.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	// Create a custom HTTP client that records whether it was used.
+	var clientUsed atomic.Bool
+	customTransport := &recordingTransport{
+		wrapped: http.DefaultTransport,
+		onRequest: func(req *http.Request) {
+			clientUsed.Store(true)
+		},
+	}
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.HTTPClient = &http.Client{Transport: customTransport}
+	ctx := context.Background()
+
+	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+	require.NoError(t, err)
+
+	// The custom HTTP client should have been used for something
+	// (either discovery or token exchange).
+	assert.True(t, clientUsed.Load(),
+		"HTTPClient from LoginConfig must be used for HTTP requests")
+}
+
+// recordingTransport wraps an http.RoundTripper and calls onRequest for
+// each request.
+type recordingTransport struct {
+	wrapped   http.RoundTripper
+	onRequest func(req *http.Request)
+}
+
+func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if rt.onRequest != nil {
+		rt.onRequest(req)
+	}
+	return rt.wrapped.RoundTrip(req)
+}
+
+func TestLogin_MultipleDistinctTokens_AntiHardcoding(t *testing.T) {
+	// Anti-hardcoding: Run two Login flows with different mock servers
+	// returning different tokens. Verify each Login returns its own token.
+	tokens := []struct {
+		access  string
+		refresh string
+	}{
+		{"access-alpha-111", "refresh-alpha-111"},
+		{"access-beta-222", "refresh-beta-222"},
+	}
+
+	for i, expected := range tokens {
+		t.Run(fmt.Sprintf("token-%d", i), func(t *testing.T) {
+			access := expected.access
+			refresh := expected.refresh
+
+			mux := http.NewServeMux()
+			var srvURL string
+			mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{
+					"authorization_endpoint": %q,
+					"token_endpoint": %q
+				}`, srvURL+"/authorize", srvURL+"/token")
+			})
+			mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{
+					"access_token": %q,
+					"refresh_token": %q,
+					"token_type": "Bearer",
+					"expires_in": 3600
+				}`, access, refresh)
+			})
+			oauthSrv := httptest.NewServer(mux)
+			srvURL = oauthSrv.URL
+			defer oauthSrv.Close()
+
+			store := newFakeWritableTokenStore()
+			authURLCh := make(chan string, 1)
+			cfg := defaultLoginConfig(oauthSrv.URL, store, authURLCh)
+			ctx := context.Background()
+
+			result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			assert.Equal(t, access, result.AccessToken,
+				"Token %d: AccessToken must match the server's response", i)
+			assert.Equal(t, refresh, result.RefreshToken,
+				"Token %d: RefreshToken must match the server's response", i)
+		})
+	}
+}
+
+func TestLogin_VerifierIsUniquePerCall(t *testing.T) {
+	// Anti-hardcoding: Each Login call must generate a unique PKCE verifier.
+	var verifiers []string
+	var mu sync.Mutex
+
+	srv := newMockOAuthServer(t, func(log tokenExchangeLog) error {
+		mu.Lock()
+		verifiers = append(verifiers, log.CodeVerifier)
+		mu.Unlock()
+		return nil
+	})
+	defer srv.Close()
+
+	for i := 0; i < 3; i++ {
+		store := newFakeWritableTokenStore()
+		authURLCh := make(chan string, 1)
+		cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+		ctx := context.Background()
+
+		_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+		require.NoError(t, err, "Login %d must succeed", i)
+	}
+
+	require.Len(t, verifiers, 3, "Must have captured 3 verifiers")
+	assert.NotEqual(t, verifiers[0], verifiers[1], "Verifiers must differ (call 0 vs 1)")
+	assert.NotEqual(t, verifiers[1], verifiers[2], "Verifiers must differ (call 1 vs 2)")
+	assert.NotEqual(t, verifiers[0], verifiers[2], "Verifiers must differ (call 0 vs 2)")
+}
+
+func TestLogin_StateMismatch_FullErrorMessage(t *testing.T) {
+	// AC-15: The exact error message for state mismatch must contain the
+	// specified string: "Security check failed (state mismatch)".
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, loginErr = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		wrongState := "wrong-state-entirely"
+		_ = simulateCallback(t, authURL, "code", &wrongState)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+
+	require.Error(t, loginErr)
+	assert.Contains(t, loginErr.Error(), "Security check failed (state mismatch)",
+		"Error must contain the exact phrase per spec; got: %q", loginErr.Error())
+}
+
+func TestLogin_Timeout_FullErrorMessage(t *testing.T) {
+	// AC-15: The timeout error must contain: "Login cancelled or timed out".
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	cfg.Timeout = 200 * time.Millisecond
+	ctx := context.Background()
+
+	var loginErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, loginErr = Login(ctx, cfg)
+	}()
+
+	<-authURLCh // Don't simulate callback.
+	<-done
+
+	require.Error(t, loginErr)
+	assert.Contains(t, loginErr.Error(), "Login cancelled or timed out",
+		"Error must contain the exact phrase per spec; got: %q", loginErr.Error())
+}
+
+func TestLogin_CallbackPath_IsWellKnown(t *testing.T) {
+	// The callback server should handle requests on the /callback path
+	// (or whatever path the redirect_uri points to).
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	store := newFakeWritableTokenStore()
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = Login(ctx, cfg)
+	}()
+
+	select {
+	case authURL := <-authURLCh:
+		parsed, err := url.Parse(authURL)
+		require.NoError(t, err)
+
+		redirectURI := parsed.Query().Get("redirect_uri")
+		require.NotEmpty(t, redirectURI)
+
+		// The redirect_uri must be a valid URL we can actually call.
+		redirectParsed, err := url.Parse(redirectURI)
+		require.NoError(t, err)
+		assert.NotEmpty(t, redirectParsed.Scheme, "redirect_uri must have a scheme")
+
+		_ = simulateCallback(t, authURL, "code", nil)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for openBrowser")
+	}
+	<-done
+}
+
+func TestLogin_NilStore_DoesNotPanic(t *testing.T) {
+	// Edge case: If Store is nil, Login should still work but may skip
+	// storing the token. It must not panic.
+	srv := newMockOAuthServer(t, nil)
+	defer srv.Close()
+
+	authURLCh := make(chan string, 1)
+	cfg := defaultLoginConfig(srv.URL, nil, authURLCh)
+	cfg.Store = nil
+	ctx := context.Background()
+
+	assert.NotPanics(t, func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = Login(ctx, cfg)
+		}()
+
+		select {
+		case authURL := <-authURLCh:
+			_ = simulateCallback(t, authURL, "code", nil)
+		case <-time.After(3 * time.Second):
+			// May fail early if nil store causes error, that's OK.
+		}
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}, "Login must not panic even with nil Store")
 }
