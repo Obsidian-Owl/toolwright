@@ -3,7 +3,7 @@
   "currentWork": {
     "id": "toolwright-core",
     "description": "Design and implement Toolwright CLI framework from spec",
-    "status": "building",
+    "status": "verified",
     "workDir": ".specwright/work/toolwright-core/units/auth",
     "unitId": "auth",
     "tasksTotal": 7,
@@ -11,15 +11,21 @@
     "currentTask": null,
     "intensity": "full"
   },
-  "gates": {},
+  "gates": {
+    "build": { "verdict": "PASS", "timestamp": "2026-03-02T14:05:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } },
+    "tests": { "verdict": "PASS", "timestamp": "2026-03-02T14:05:00Z", "findings": { "block": 0, "warn": 0, "info": 0 }, "testCount": 216 },
+    "security": { "verdict": "PASS", "timestamp": "2026-03-02T14:05:00Z", "findings": { "block": 0, "warn": 5, "info": 1 } },
+    "wiring": { "verdict": "PASS", "timestamp": "2026-03-02T14:05:00Z", "findings": { "block": 0, "warn": 3, "info": 2 } },
+    "spec": { "verdict": "PASS", "timestamp": "2026-03-02T14:05:00Z", "findings": { "block": 0, "warn": 0, "info": 0 }, "coverage": "18/18" }
+  },
   "workUnits": [
     { "id": "manifest", "description": "Go module, project structure, manifest types/parser/validation, JSON Schema validator", "status": "shipped", "order": 1, "workDir": ".specwright/work/toolwright-core/units/manifest", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/1" },
-    { "id": "auth", "description": "Token resolver chain, keyring storage, fallback file store, OAuth 2.1 PKCE flow", "status": "building", "order": 2, "workDir": ".specwright/work/toolwright-core/units/auth" },
+    { "id": "auth", "description": "Token resolver chain, keyring storage, fallback file store, OAuth 2.1 PKCE flow", "status": "verified", "order": 2, "workDir": ".specwright/work/toolwright-core/units/auth" },
     { "id": "runner", "description": "Process execution, arg mapping, token injection, timeout, output capture", "status": "planned", "order": 3, "workDir": ".specwright/work/toolwright-core/units/runner" },
     { "id": "testing", "description": "Test YAML parser, JSONPath assertions, TAP + JSON output", "status": "planned", "order": 4, "workDir": ".specwright/work/toolwright-core/units/testing" },
     { "id": "codegen", "description": "Generator interface, Go CLI templates, TypeScript MCP templates", "status": "planned", "order": 5, "workDir": ".specwright/work/toolwright-core/units/codegen" },
     { "id": "cli", "description": "Cobra commands, TUI wizard, init scaffolding, AI generation, main.go", "status": "planned", "order": 6, "workDir": ".specwright/work/toolwright-core/units/cli" }
   ],
   "lock": null,
-  "lastUpdated": "2026-03-02T14:00:00Z"
+  "lastUpdated": "2026-03-02T14:10:00Z"
 }
