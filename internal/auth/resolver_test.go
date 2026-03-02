@@ -37,8 +37,8 @@ func (f *fakeTokenStore) Get(key string) (*StoredToken, error) {
 	if !ok {
 		return nil, fmt.Errorf("token not found for key %q", key)
 	}
-	copy := *tok
-	return &copy, nil
+	tokCopy := *tok
+	return &tokCopy, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -494,19 +494,19 @@ func TestResolver_ErrorMessageExactFormat(t *testing.T) {
 			name:     "github tool",
 			toolName: "github-cli",
 			tokenEnv: "GITHUB_TOKEN",
-			wantErr:  `tool "github-cli" requires authentication. Set GITHUB_TOKEN or run "toolwright login github-cli".`,
+			wantErr:  `tool "github-cli" requires authentication, set GITHUB_TOKEN or run "toolwright login github-cli"`,
 		},
 		{
 			name:     "custom tool",
 			toolName: "my-api",
 			tokenEnv: "MY_API_KEY",
-			wantErr:  `tool "my-api" requires authentication. Set MY_API_KEY or run "toolwright login my-api".`,
+			wantErr:  `tool "my-api" requires authentication, set MY_API_KEY or run "toolwright login my-api"`,
 		},
 		{
 			name:     "tool with special name",
 			toolName: "acme-tool-v2",
 			tokenEnv: "ACME_TOKEN",
-			wantErr:  `tool "acme-tool-v2" requires authentication. Set ACME_TOKEN or run "toolwright login acme-tool-v2".`,
+			wantErr:  `tool "acme-tool-v2" requires authentication, set ACME_TOKEN or run "toolwright login acme-tool-v2"`,
 		},
 	}
 

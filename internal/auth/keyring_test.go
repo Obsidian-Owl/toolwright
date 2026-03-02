@@ -874,4 +874,3 @@ func TestKeyringStore_RoundTrip_TableDriven(t *testing.T) {
 		})
 	}
 }
-

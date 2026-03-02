@@ -59,23 +59,28 @@ func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
 	verifier := oauth2.GenerateVerifier()
 
 	stateBytes := make([]byte, 32)
-	if _, err := rand.Read(stateBytes); err != nil {
-		return nil, fmt.Errorf("generate state: %w", err)
+	if _, randErr := rand.Read(stateBytes); randErr != nil {
+		return nil, fmt.Errorf("generate state: %w", randErr)
 	}
 	state := base64.RawURLEncoding.EncodeToString(stateBytes)
 
 	// Step 3: Start callback HTTP server.
 	// Try the configured address first; if it fails, fall back to a random port.
-	ln, err := net.Listen("tcp", cfg.ListenAddr)
+	lc := net.ListenConfig{}
+	ln, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)
 	if err != nil {
-		ln, err = net.Listen("tcp", "127.0.0.1:0")
+		ln, err = lc.Listen(ctx, "tcp", "127.0.0.1:0")
 		if err != nil {
 			return nil, fmt.Errorf("start callback server: %w", err)
 		}
 	}
 
 	// Step 4: Build redirect URI from actual server address.
-	port := ln.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return nil, fmt.Errorf("start callback server: listener address is not TCP")
+	}
+	port := tcpAddr.Port
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
 	// Step 5: Create oauth2.Config.
@@ -105,7 +110,7 @@ func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
 
 		if receivedState != state {
 			http.Error(w, "Security check failed (state mismatch)", http.StatusBadRequest)
-			resultCh <- callbackResult{err: fmt.Errorf("Security check failed (state mismatch)")}
+			resultCh <- callbackResult{err: fmt.Errorf("security check failed (state mismatch)")}
 			return
 		}
 
@@ -128,8 +133,8 @@ func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
 	}()
 
 	// Step 9: Open browser.
-	if err := cfg.OpenBrowser(authURL); err != nil {
-		return nil, fmt.Errorf("open browser: %w", err)
+	if browserErr := cfg.OpenBrowser(authURL); browserErr != nil {
+		return nil, fmt.Errorf("open browser: %w", browserErr)
 	}
 
 	// Step 10: Wait for callback or timeout.
@@ -143,7 +148,7 @@ func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
 	case cbResult = <-resultCh:
 		// Got callback.
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("Login cancelled or timed out")
+		return nil, fmt.Errorf("login cancelled or timed out")
 	case <-ctx.Done():
 		return nil, fmt.Errorf("login cancelled: %w", ctx.Err())
 	}

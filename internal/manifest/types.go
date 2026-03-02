@@ -149,11 +149,7 @@ func (e Example) MarshalYAML() (interface{}, error) {
 		Args        []string          `yaml:"args,omitempty"`
 		Flags       map[string]string `yaml:"flags,omitempty"`
 	}
-	out := exampleAlias{
-		Description: e.Description,
-		Args:        e.Args,
-		Flags:       e.Flags,
-	}
+	out := exampleAlias(e)
 	// When Args is a non-nil empty slice, use a node that emits "args: []"
 	// so round-trip preserves the semantic difference.
 	if e.Args != nil && len(e.Args) == 0 {
@@ -162,11 +158,7 @@ func (e Example) MarshalYAML() (interface{}, error) {
 			Args        []string          `yaml:"args"`
 			Flags       map[string]string `yaml:"flags,omitempty"`
 		}
-		return exampleWithEmptyArgs{
-			Description: e.Description,
-			Args:        e.Args,
-			Flags:       e.Flags,
-		}, nil
+		return exampleWithEmptyArgs(e), nil
 	}
 	return out, nil
 }
