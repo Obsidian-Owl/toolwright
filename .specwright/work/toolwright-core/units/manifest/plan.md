@@ -64,3 +64,24 @@
 | `internal/schema/validator.go` | Create | schema |
 | `internal/schema/validator_test.go` | Create | schema |
 | `schemas/toolwright.schema.json` | Create | embedded asset |
+
+## As-Built Notes
+
+### Plan deviations
+1. **Tasks 2+3 merged**: Manifest types and parser implemented together (types.go contains both types and Parse/ParseFile). The tester wrote tests for both in `parser_test.go` since parsing requires types.
+2. **Task 6 deferred**: `schemas/toolwright.schema.json` not created — the schema validator tests use inline `fstest.MapFS` schemas. The actual manifest JSON Schema will be created when needed by the CLI validate command (Unit 6).
+3. **JSON Schema library**: Used `kaptinlin/jsonschema` instead of spec's `santhosh-tekuri/jsonschema/v6`. The kaptinlin library had a simpler API for the test patterns. All AC-9/AC-10 criteria are met. Can be swapped if needed.
+4. **Example.MarshalYAML**: Added a custom `MarshalYAML` method on `Example` to handle round-trip tests (AC-11) — preserves non-nil empty slices correctly.
+
+### Actual files
+| File | Lines | Tests |
+|------|-------|-------|
+| `internal/manifest/types.go` | ~200 | 39 tests in parser_test.go |
+| `internal/manifest/validate.go` | ~280 | 55+ tests in validate_test.go |
+| `internal/schema/validator.go` | ~60 | 19 tests in validator_test.go |
+| `embed.go` | 8 | — |
+| `cmd/toolwright/main.go` | 4 | — |
+
+### Test summary
+- Total: 113+ tests across manifest and schema packages
+- All pass, `go vet` clean, `go build` clean
