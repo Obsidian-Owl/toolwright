@@ -6,8 +6,8 @@
     "status": "building",
     "workDir": ".specwright/work/toolwright-core/units/auth",
     "unitId": "auth",
-    "tasksTotal": null,
-    "tasksCompleted": [],
+    "tasksTotal": 7,
+    "tasksCompleted": ["task-1-types", "task-2-keyring", "task-3-filestore", "task-4-resolver", "task-5-discovery", "task-6-login", "task-7-refresh"],
     "currentTask": null,
     "intensity": "full"
   },
@@ -21,5 +21,5 @@
     { "id": "cli", "description": "Cobra commands, TUI wizard, init scaffolding, AI generation, main.go", "status": "planned", "order": 6, "workDir": ".specwright/work/toolwright-core/units/cli" }
   ],
   "lock": null,
-  "lastUpdated": "2026-03-02T13:20:00Z"
+  "lastUpdated": "2026-03-02T14:00:00Z"
 }
