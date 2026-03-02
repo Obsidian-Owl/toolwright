@@ -307,7 +307,7 @@ func TestKeyringStore_SerializesAsJSON(t *testing.T) {
 	for _, key := range expectedKeys {
 		_, exists := raw[key]
 		assert.True(t, exists, "Stored JSON must contain field %q, keys present: %v",
-			key, jsonKeys(raw))
+			key, mapKeys(raw))
 	}
 
 	// Verify PascalCase fields are NOT present (catches missing json tags on StoredToken).
@@ -875,14 +875,3 @@ func TestKeyringStore_RoundTrip_TableDriven(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-func jsonKeys(m map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}

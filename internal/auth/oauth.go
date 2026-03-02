@@ -44,6 +44,11 @@ func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
 		ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
 	}
 
+	// Default ListenAddr if not configured.
+	if cfg.ListenAddr == "" {
+		cfg.ListenAddr = "127.0.0.1:8085"
+	}
+
 	// Step 1: Discover endpoints.
 	endpoint, _, err := DiscoverEndpoints(ctx, cfg.Auth.ProviderURL, cfg.Auth.Endpoints)
 	if err != nil {
@@ -63,7 +68,7 @@ func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
 	// Try the configured address first; if it fails, fall back to a random port.
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
-		ln, err = net.Listen("tcp", ":0")
+		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			return nil, fmt.Errorf("start callback server: %w", err)
 		}
@@ -260,11 +265,25 @@ func DiscoverEndpoints(ctx context.Context, providerURL string, manual *manifest
 	// Strip trailing slash to avoid double-slashes when appending well-known paths.
 	base := strings.TrimRight(providerURL, "/")
 
+	// Enforce HTTPS for production use; allow HTTP for localhost/loopback testing.
+	if !strings.HasPrefix(base, "https://") &&
+		!strings.HasPrefix(base, "http://127.0.0.1") &&
+		!strings.HasPrefix(base, "http://localhost") &&
+		!strings.HasPrefix(base, "http://[::1]") {
+		return nil, "", fmt.Errorf("providerURL must use HTTPS (got %q)", providerURL)
+	}
+
+	// Extract HTTP client from context for discovery requests.
+	client := http.DefaultClient
+	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil {
+		client = c
+	}
+
 	rfc8414URL := base + "/.well-known/oauth-authorization-server"
 	oidcURL := base + "/.well-known/openid-configuration"
 
 	// Try RFC 8414 first.
-	if doc, ok := fetchDiscoveryDoc(ctx, rfc8414URL); ok {
+	if doc, ok := fetchDiscoveryDoc(ctx, rfc8414URL, client); ok {
 		return &oauth2.Endpoint{AuthURL: doc.AuthorizationEndpoint, TokenURL: doc.TokenEndpoint}, doc.JWKSURI, nil
 	}
 
@@ -274,7 +293,7 @@ func DiscoverEndpoints(ctx context.Context, providerURL string, manual *manifest
 	}
 
 	// Try OIDC configuration.
-	if doc, ok := fetchDiscoveryDoc(ctx, oidcURL); ok {
+	if doc, ok := fetchDiscoveryDoc(ctx, oidcURL, client); ok {
 		return &oauth2.Endpoint{AuthURL: doc.AuthorizationEndpoint, TokenURL: doc.TokenEndpoint}, doc.JWKSURI, nil
 	}
 
@@ -298,13 +317,17 @@ func DiscoverEndpoints(ctx context.Context, providerURL string, manual *manifest
 // response as a discoveryDoc. Returns (doc, true) on success, or (zero, false)
 // if the request fails, the response is not 2xx, the JSON is invalid, or the
 // document is missing required endpoint fields.
-func fetchDiscoveryDoc(ctx context.Context, url string) (discoveryDoc, bool) {
+func fetchDiscoveryDoc(ctx context.Context, url string, client *http.Client) (discoveryDoc, bool) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return discoveryDoc{}, false
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return discoveryDoc{}, false
 	}
@@ -314,7 +337,8 @@ func fetchDiscoveryDoc(ctx context.Context, url string) (discoveryDoc, bool) {
 		return discoveryDoc{}, false
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Limit body to 1MB to prevent OOM from malicious providers.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return discoveryDoc{}, false
 	}

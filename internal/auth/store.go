@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -24,7 +25,7 @@ func NewFileStore(basePath string) *FileStore {
 // defaults when basePath is empty.
 func (fs *FileStore) resolvedBasePath() string {
 	if fs.basePath != "" {
-		return fs.basePath
+		return filepath.Clean(fs.basePath)
 	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "toolwright")
@@ -101,16 +102,40 @@ func checkPermissions(path string) error {
 }
 
 // Get retrieves a stored token from the file store.
+// It opens the file once and checks permissions via Fstat on the open fd
+// to avoid a TOCTOU race between permission check and read.
 func (fs *FileStore) Get(key string) (*StoredToken, error) {
 	path := fs.tokensFilePath()
 
-	if err := checkPermissions(path); err != nil {
-		return nil, err
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening token file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stating token file: %w", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		return nil, fmt.Errorf("unsafe token file permission %04o: token file must have permission 0600 only; fix with: chmod 0600 %s",
+			info.Mode().Perm(), path)
 	}
 
-	tf, err := fs.readTokenFile(path)
+	data, err := io.ReadAll(f)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading token file: %w", err)
+	}
+
+	tf := TokenFile{
+		Version: 1,
+		Tokens:  make(map[string]StoredToken),
+	}
+	if err := json.Unmarshal(data, &tf); err != nil {
+		return nil, fmt.Errorf("parsing token file: %w", err)
+	}
+	if tf.Tokens == nil {
+		tf.Tokens = make(map[string]StoredToken)
 	}
 
 	tok, ok := tf.Tokens[key]
@@ -118,7 +143,6 @@ func (fs *FileStore) Get(key string) (*StoredToken, error) {
 		return nil, fmt.Errorf("token not found for key %q", key)
 	}
 
-	// Return a fresh copy so callers cannot mutate our in-memory state.
 	copy := tok
 	return &copy, nil
 }

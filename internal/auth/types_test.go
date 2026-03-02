@@ -165,7 +165,7 @@ func TestStoredToken_JSON_FieldCount(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, raw, 5,
-		"StoredToken JSON should have exactly 5 fields; got keys: %v", keysOf(raw))
+		"StoredToken JSON should have exactly 5 fields; got keys: %v", mapKeys(raw))
 }
 
 func TestStoredToken_JSON_EmptyScopes(t *testing.T) {
@@ -612,14 +612,3 @@ func TestTokenFile_JSON_SpecialMapKeys(t *testing.T) {
 	assert.True(t, ok, "URL key with query params must survive JSON round-trip")
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-func keysOf(m map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}

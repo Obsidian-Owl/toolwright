@@ -427,7 +427,7 @@ func TestFileStore_JSON_HasExactTopLevelKeys(t *testing.T) {
 	_, hasTokensPascal := raw["Tokens"]
 	assert.False(t, hasTokensPascal, "JSON must NOT contain 'Tokens'")
 
-	assert.Len(t, raw, 2, "JSON must have exactly 2 top-level keys, got %v", rawKeys(raw))
+	assert.Len(t, raw, 2, "JSON must have exactly 2 top-level keys, got %v", mapKeys(raw))
 }
 
 func TestFileStore_JSON_TokenFieldsAreSnakeCase(t *testing.T) {
@@ -1066,14 +1066,3 @@ func TestFileStore_Delete_RemovesFromJSONFile(t *testing.T) {
 	assert.True(t, hasAlive, "Surviving key 'alive' must still exist in file")
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-func rawKeys(m map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
