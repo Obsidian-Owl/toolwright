@@ -171,6 +171,71 @@ func Login(ctx context.Context, cfg LoginConfig) (*StoredToken, error) {
 	return stored, nil
 }
 
+// RefreshConfig holds all configuration for a token refresh operation.
+type RefreshConfig struct {
+	Endpoint   oauth2.Endpoint
+	HTTPClient *http.Client // for testing — mock the token endpoint
+	Store      WritableTokenStore
+	ToolName   string
+}
+
+// Refresh attempts to refresh an expired OAuth token using its refresh_token.
+// If the refresh succeeds, the new token is stored (if Store is non-nil) and returned.
+// If the refresh fails or no refresh_token is available, an error is returned
+// directing the user to re-run "toolwright login {toolName}".
+func Refresh(ctx context.Context, _ manifest.Auth, stored StoredToken, cfg RefreshConfig) (*StoredToken, error) {
+	// Step 1: Require a refresh token.
+	if stored.RefreshToken == "" {
+		return nil, fmt.Errorf("token refresh failed for %s: no refresh token available. Re-run \"toolwright login %s\"",
+			cfg.ToolName, cfg.ToolName)
+	}
+
+	// Step 2: Build an oauth2.Token from the stored token.
+	existing := &oauth2.Token{
+		AccessToken:  stored.AccessToken,
+		RefreshToken: stored.RefreshToken,
+		TokenType:    stored.TokenType,
+		Expiry:       stored.Expiry,
+	}
+
+	// Step 3: Create an oauth2.Config with the provided endpoint.
+	oauthCfg := &oauth2.Config{
+		Endpoint: cfg.Endpoint,
+	}
+
+	// Step 4: Inject custom HTTP client into context if provided.
+	if cfg.HTTPClient != nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
+	}
+
+	// Step 5: Create a token source that auto-refreshes when expired.
+	tokenSource := oauthCfg.TokenSource(ctx, existing)
+
+	// Step 6: Obtain a valid token (refreshing if necessary).
+	newToken, err := tokenSource.Token()
+	if err != nil {
+		return nil, fmt.Errorf("token refresh failed for %s: %w. Re-run \"toolwright login %s\"",
+			cfg.ToolName, err, cfg.ToolName)
+	}
+
+	// Step 7: Convert oauth2.Token to StoredToken.
+	result := &StoredToken{
+		AccessToken:  newToken.AccessToken,
+		RefreshToken: newToken.RefreshToken,
+		TokenType:    newToken.TokenType,
+		Expiry:       newToken.Expiry,
+	}
+
+	// Step 8: Persist to store if provided.
+	if cfg.Store != nil {
+		if err := cfg.Store.Set(cfg.ToolName, *result); err != nil {
+			return nil, fmt.Errorf("store refreshed token for %s: %w", cfg.ToolName, err)
+		}
+	}
+
+	return result, nil
+}
+
 // discoveryDoc is the minimal set of fields we parse from a well-known
 // discovery document (RFC 8414 or OIDC).
 type discoveryDoc struct {

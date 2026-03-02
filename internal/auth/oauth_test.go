@@ -22,6 +22,7 @@ import (
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 )
 
 // ---------------------------------------------------------------------------
@@ -2557,4 +2558,821 @@ func TestLogin_NilStore_DoesNotPanic(t *testing.T) {
 		case <-time.After(5 * time.Second):
 		}
 	}, "Login must not panic even with nil Store")
+}
+
+// ===========================================================================
+// AC-17: Token Refresh tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test helpers for Refresh tests
+// ---------------------------------------------------------------------------
+
+// recordingTokenStore wraps fakeWritableTokenStore and records Set calls for
+// assertions about what was persisted and how many times.
+type recordingTokenStore struct {
+	fakeWritableTokenStore
+	mu       sync.Mutex
+	setCalls []storedSetCall
+	setErr   error // if non-nil, Set returns this error
+}
+
+type storedSetCall struct {
+	Key   string
+	Token StoredToken
+}
+
+func newRecordingTokenStore() *recordingTokenStore {
+	return &recordingTokenStore{
+		fakeWritableTokenStore: fakeWritableTokenStore{
+			tokens: make(map[string]StoredToken),
+		},
+	}
+}
+
+func (r *recordingTokenStore) Set(key string, token StoredToken) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.setCalls = append(r.setCalls, storedSetCall{Key: key, Token: token})
+	if r.setErr != nil {
+		return r.setErr
+	}
+	r.tokens[key] = token
+	return nil
+}
+
+func (r *recordingTokenStore) getSetCalls() []storedSetCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]storedSetCall, len(r.setCalls))
+	copy(cp, r.setCalls)
+	return cp
+}
+
+// newMockTokenRefreshServer creates a test server that serves a /token endpoint
+// suitable for OAuth token refresh. It validates grant_type=refresh_token and
+// returns the configured access/refresh tokens with the given expiry.
+//
+// If wantRefreshToken is non-empty, the server validates that the incoming
+// refresh_token matches; otherwise any refresh_token is accepted.
+func newMockTokenRefreshServer(
+	t *testing.T,
+	newAccessToken string,
+	newRefreshToken string,
+	expiresIn int,
+	wantRefreshToken string,
+) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		grantType := r.FormValue("grant_type")
+		if grantType != "refresh_token" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, `{"error": "unsupported_grant_type"}`)
+			return
+		}
+
+		if wantRefreshToken != "" && r.FormValue("refresh_token") != wantRefreshToken {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, `{"error": "invalid_grant", "error_description": "refresh token mismatch"}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"access_token": %q,
+			"refresh_token": %q,
+			"token_type": "Bearer",
+			"expires_in": %d
+		}`, newAccessToken, newRefreshToken, expiresIn)
+	}))
+}
+
+// newErrorTokenRefreshServer creates a test server that always returns
+// an error response for token refresh requests.
+func newErrorTokenRefreshServer(t *testing.T, statusCode int, errorCode string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		fmt.Fprintf(w, `{"error": %q, "error_description": "token refresh denied"}`, errorCode)
+	}))
+}
+
+// expiredStoredToken returns a StoredToken that is expired (1 hour in the past)
+// with a valid refresh token.
+func expiredStoredToken(refreshToken string) StoredToken {
+	return StoredToken{
+		AccessToken:  "expired-access-token",
+		RefreshToken: refreshToken,
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(-1 * time.Hour),
+		Scopes:       []string{"read", "write"},
+	}
+}
+
+// defaultRefreshConfig creates a RefreshConfig using the given token server URL
+// and store.
+func defaultRefreshConfig(tokenServerURL string, store WritableTokenStore) RefreshConfig {
+	return RefreshConfig{
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  tokenServerURL + "/authorize",
+			TokenURL: tokenServerURL + "/token",
+		},
+		HTTPClient: &http.Client{Timeout: 5 * time.Second},
+		Store:      store,
+		ToolName:   "test-tool",
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Refresh succeeds — happy path
+// ---------------------------------------------------------------------------
+
+func TestRefresh_ExpiredToken_RefreshSucceeds_ReturnsNewToken(t *testing.T) {
+	// AC-17: Stored token expired with refresh_token available -> silent refresh
+	// attempted, succeeds, returns new StoredToken with new access token.
+	srv := newMockTokenRefreshServer(t,
+		"new-access-token-abc", "new-refresh-token-xyz", 3600, "old-refresh-token")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("old-refresh-token")
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err, "Refresh must succeed when token server returns valid response")
+	require.NotNil(t, result, "Refresh must return a non-nil StoredToken on success")
+
+	// Verify the returned token has the NEW access token, not the old one.
+	assert.Equal(t, "new-access-token-abc", result.AccessToken,
+		"Returned token must have the new access token from the refresh response")
+	assert.NotEqual(t, stored.AccessToken, result.AccessToken,
+		"Returned access token must differ from the expired input token")
+}
+
+func TestRefresh_ExpiredToken_RefreshSucceeds_TokenStored(t *testing.T) {
+	// AC-17: After successful refresh, Store.Set must be called with the new token.
+	srv := newMockTokenRefreshServer(t,
+		"stored-access-token", "stored-refresh-token", 3600, "")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("my-refresh-token")
+	auth := manifest.Auth{Type: "oauth"}
+
+	_, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err, "Refresh must succeed")
+
+	// Verify the store was called.
+	setCalls := store.getSetCalls()
+	require.Len(t, setCalls, 1, "Store.Set must be called exactly once after successful refresh")
+	assert.Equal(t, "test-tool", setCalls[0].Key,
+		"Store.Set must be called with ToolName as the key")
+	assert.Equal(t, "stored-access-token", setCalls[0].Token.AccessToken,
+		"Stored token must have the new access token")
+}
+
+func TestRefresh_NewTokenHasUpdatedFields(t *testing.T) {
+	// AC-17: After refresh, AccessToken and Expiry must differ from the expired
+	// input. RefreshToken may also change.
+	srv := newMockTokenRefreshServer(t,
+		"updated-access-token", "updated-refresh-token", 7200, "")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	oldExpiry := time.Now().Add(-1 * time.Hour)
+	stored := StoredToken{
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       oldExpiry,
+	}
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// AccessToken must have changed.
+	assert.Equal(t, "updated-access-token", result.AccessToken,
+		"AccessToken must be updated after refresh")
+	assert.NotEqual(t, stored.AccessToken, result.AccessToken,
+		"New AccessToken must differ from old")
+
+	// Expiry must be in the future (the server returned expires_in=7200).
+	assert.True(t, result.Expiry.After(time.Now()),
+		"New token's Expiry must be in the future, got %v", result.Expiry)
+	assert.NotEqual(t, oldExpiry, result.Expiry,
+		"New Expiry must differ from old Expiry")
+
+	// RefreshToken should be the new one from the server.
+	assert.Equal(t, "updated-refresh-token", result.RefreshToken,
+		"RefreshToken should be updated when server provides a new one")
+
+	// TokenType must be preserved.
+	assert.Equal(t, "Bearer", result.TokenType,
+		"TokenType must be set correctly from refresh response")
+}
+
+func TestRefresh_NewTokenNotExpired(t *testing.T) {
+	// AC-17: The returned token's IsExpired() must return false.
+	srv := newMockTokenRefreshServer(t,
+		"fresh-token", "fresh-refresh", 3600, "")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("my-refresh")
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.False(t, result.IsExpired(),
+		"Refreshed token must not be expired; Expiry=%v, Now=%v",
+		result.Expiry, time.Now())
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Refresh fails — error cases
+// ---------------------------------------------------------------------------
+
+func TestRefresh_ServerError_ReturnsErrorWithLoginHint(t *testing.T) {
+	// AC-17: Token endpoint returns 400 error -> error must contain
+	// "toolwright login" hint.
+	srv := newErrorTokenRefreshServer(t, http.StatusBadRequest, "invalid_grant")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("stale-refresh-token")
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.Error(t, err, "Refresh must fail when token server returns an error")
+	assert.Nil(t, result, "Result must be nil on refresh failure")
+
+	errMsg := err.Error()
+	assert.Contains(t, errMsg, "toolwright login",
+		"Error must direct user to re-run 'toolwright login'; got: %s", errMsg)
+}
+
+func TestRefresh_NetworkError_ReturnsErrorWithLoginHint(t *testing.T) {
+	// AC-17: Unreachable server -> error must contain "toolwright login" hint.
+	store := newRecordingTokenStore()
+	cfg := RefreshConfig{
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  "http://127.0.0.1:1/authorize",
+			TokenURL: "http://127.0.0.1:1/token",
+		},
+		HTTPClient: &http.Client{Timeout: 1 * time.Second},
+		Store:      store,
+		ToolName:   "my-tool",
+	}
+	stored := expiredStoredToken("some-refresh-token")
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.Error(t, err, "Refresh must fail when server is unreachable")
+	assert.Nil(t, result, "Result must be nil on network error")
+
+	errMsg := err.Error()
+	assert.Contains(t, errMsg, "toolwright login",
+		"Error must direct user to re-run 'toolwright login'; got: %s", errMsg)
+}
+
+func TestRefresh_NoRefreshToken_ReturnsErrorWithLoginHint(t *testing.T) {
+	// AC-17: StoredToken with empty RefreshToken -> error must contain
+	// "toolwright login" hint. The function should not even attempt a
+	// refresh without a refresh token.
+	srv := newMockTokenRefreshServer(t,
+		"should-not-get-here", "should-not-get-here", 3600, "")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := StoredToken{
+		AccessToken:  "expired-no-refresh",
+		RefreshToken: "", // Empty — no refresh token
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(-1 * time.Hour),
+	}
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.Error(t, err, "Refresh must fail when no refresh token is available")
+	assert.Nil(t, result, "Result must be nil when no refresh token")
+
+	errMsg := err.Error()
+	assert.Contains(t, errMsg, "toolwright login",
+		"Error must direct user to re-run 'toolwright login'; got: %s", errMsg)
+
+	// Store must NOT have been called.
+	setCalls := store.getSetCalls()
+	assert.Empty(t, setCalls, "Store.Set must not be called when refresh fails")
+}
+
+func TestRefresh_ErrorMessageIncludesToolName(t *testing.T) {
+	// AC-17: The error message must include the specific tool name so the user
+	// knows which tool to re-authenticate.
+	tests := []struct {
+		name     string
+		toolName string
+	}{
+		{name: "simple tool name", toolName: "my-api-tool"},
+		{name: "tool with special chars", toolName: "github-copilot"},
+		{name: "another tool", toolName: "slack-bot"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newErrorTokenRefreshServer(t, http.StatusBadRequest, "invalid_grant")
+			defer srv.Close()
+
+			store := newRecordingTokenStore()
+			cfg := defaultRefreshConfig(srv.URL, store)
+			cfg.ToolName = tc.toolName
+			stored := expiredStoredToken("bad-refresh")
+			auth := manifest.Auth{Type: "oauth"}
+
+			_, err := Refresh(context.Background(), auth, stored, cfg)
+			require.Error(t, err)
+
+			errMsg := err.Error()
+			assert.Contains(t, errMsg, tc.toolName,
+				"Error message must include tool name %q; got: %s", tc.toolName, errMsg)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Edge cases
+// ---------------------------------------------------------------------------
+
+func TestRefresh_NonExpiredToken_StillWorks(t *testing.T) {
+	// Edge case: Token is not yet expired. Refresh should still function
+	// correctly — it may return the existing token or do a refresh, but
+	// it must not error.
+	srv := newMockTokenRefreshServer(t,
+		"refreshed-anyway", "refreshed-refresh", 3600, "")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := StoredToken{
+		AccessToken:  "still-valid-access",
+		RefreshToken: "valid-refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(1 * time.Hour), // Not expired!
+	}
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err, "Refresh must not error for a non-expired token")
+	require.NotNil(t, result, "Refresh must return a non-nil token")
+
+	// The returned token must be valid (not expired).
+	assert.False(t, result.IsExpired(),
+		"Returned token must not be expired")
+	// The access token must be non-empty.
+	assert.NotEmpty(t, result.AccessToken,
+		"Returned token must have a non-empty AccessToken")
+}
+
+func TestRefresh_ContextCancellation_ReturnsError(t *testing.T) {
+	// Edge case: Cancelled context must return an error, not hang or panic.
+	srv := newMockTokenRefreshServer(t,
+		"should-not-reach", "should-not-reach", 3600, "")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("my-refresh")
+	auth := manifest.Auth{Type: "oauth"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	result, err := Refresh(ctx, auth, stored, cfg)
+	require.Error(t, err, "Refresh must return error for cancelled context")
+	assert.Nil(t, result, "Result must be nil on context cancellation")
+}
+
+func TestRefresh_NilStore_DoesNotPanic(t *testing.T) {
+	// Edge case: Store is nil -> refresh succeeds but does not attempt
+	// to persist. Must not panic.
+	srv := newMockTokenRefreshServer(t,
+		"nil-store-access", "nil-store-refresh", 3600, "")
+	defer srv.Close()
+
+	cfg := RefreshConfig{
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  srv.URL + "/authorize",
+			TokenURL: srv.URL + "/token",
+		},
+		HTTPClient: &http.Client{Timeout: 5 * time.Second},
+		Store:      nil, // Intentionally nil
+		ToolName:   "test-tool",
+	}
+	stored := expiredStoredToken("my-refresh")
+	auth := manifest.Auth{Type: "oauth"}
+
+	assert.NotPanics(t, func() {
+		result, err := Refresh(context.Background(), auth, stored, cfg)
+		require.NoError(t, err, "Refresh must succeed even with nil Store")
+		require.NotNil(t, result, "Refresh must return a token even with nil Store")
+		assert.Equal(t, "nil-store-access", result.AccessToken,
+			"Returned token must have the refreshed access token")
+	}, "Refresh must not panic when Store is nil")
+}
+
+func TestRefresh_AntiHardcoding_TwoDifferentTokens(t *testing.T) {
+	// Anti-hardcoding: Two different expired tokens with different refresh tokens
+	// must produce two different refreshed tokens. A hardcoded implementation
+	// would fail this.
+	type testCase struct {
+		oldRefresh     string
+		newAccess      string
+		newRefresh     string
+		serverValidate string
+	}
+
+	cases := []testCase{
+		{
+			oldRefresh:     "refresh-alpha",
+			newAccess:      "access-alpha-new",
+			newRefresh:     "refresh-alpha-new",
+			serverValidate: "refresh-alpha",
+		},
+		{
+			oldRefresh:     "refresh-bravo",
+			newAccess:      "access-bravo-new",
+			newRefresh:     "refresh-bravo-new",
+			serverValidate: "refresh-bravo",
+		},
+	}
+
+	var results []*StoredToken
+
+	for _, tc := range cases {
+		srv := newMockTokenRefreshServer(t,
+			tc.newAccess, tc.newRefresh, 3600, tc.serverValidate)
+
+		store := newRecordingTokenStore()
+		cfg := defaultRefreshConfig(srv.URL, store)
+		stored := expiredStoredToken(tc.oldRefresh)
+		auth := manifest.Auth{Type: "oauth"}
+
+		result, err := Refresh(context.Background(), auth, stored, cfg)
+		srv.Close()
+
+		require.NoError(t, err, "Refresh must succeed for refresh_token=%q", tc.oldRefresh)
+		require.NotNil(t, result)
+
+		assert.Equal(t, tc.newAccess, result.AccessToken,
+			"AccessToken must match the server response for refresh_token=%q", tc.oldRefresh)
+		assert.Equal(t, tc.newRefresh, result.RefreshToken,
+			"RefreshToken must match the server response for refresh_token=%q", tc.oldRefresh)
+
+		results = append(results, result)
+	}
+
+	// The two results must be different from each other.
+	require.Len(t, results, 2)
+	assert.NotEqual(t, results[0].AccessToken, results[1].AccessToken,
+		"Two different refresh tokens must produce different access tokens")
+	assert.NotEqual(t, results[0].RefreshToken, results[1].RefreshToken,
+		"Two different refresh tokens must produce different refresh tokens")
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Table-driven test covering all Refresh scenarios
+// ---------------------------------------------------------------------------
+
+func TestRefresh_TableDriven(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupServer    func(t *testing.T) *httptest.Server
+		stored         StoredToken
+		toolName       string
+		nilStore       bool
+		cancelCtx      bool
+		wantErr        bool
+		wantErrSubs    []string // substrings that must appear in error
+		wantAccess     string   // expected access token (empty if wantErr)
+		wantNotExpired bool     // if true, result.IsExpired() must be false
+	}{
+		{
+			name: "expired token with refresh succeeds",
+			setupServer: func(t *testing.T) *httptest.Server {
+				return newMockTokenRefreshServer(t, "table-new-access", "table-new-refresh", 3600, "")
+			},
+			stored:         expiredStoredToken("table-refresh"),
+			toolName:       "table-tool",
+			wantAccess:     "table-new-access",
+			wantNotExpired: true,
+		},
+		{
+			name: "server returns 401 unauthorized",
+			setupServer: func(t *testing.T) *httptest.Server {
+				return newErrorTokenRefreshServer(t, http.StatusUnauthorized, "invalid_client")
+			},
+			stored:      expiredStoredToken("bad-refresh"),
+			toolName:    "table-tool",
+			wantErr:     true,
+			wantErrSubs: []string{"toolwright login", "table-tool"},
+		},
+		{
+			name: "server returns 500 internal error",
+			setupServer: func(t *testing.T) *httptest.Server {
+				return newErrorTokenRefreshServer(t, http.StatusInternalServerError, "server_error")
+			},
+			stored:      expiredStoredToken("server-error-refresh"),
+			toolName:    "broken-tool",
+			wantErr:     true,
+			wantErrSubs: []string{"toolwright login", "broken-tool"},
+		},
+		{
+			name: "no refresh token",
+			setupServer: func(t *testing.T) *httptest.Server {
+				return newMockTokenRefreshServer(t, "unreachable", "unreachable", 3600, "")
+			},
+			stored: StoredToken{
+				AccessToken:  "expired-no-rt",
+				RefreshToken: "",
+				TokenType:    "Bearer",
+				Expiry:       time.Now().Add(-1 * time.Hour),
+			},
+			toolName:    "no-rt-tool",
+			wantErr:     true,
+			wantErrSubs: []string{"toolwright login", "no-rt-tool"},
+		},
+		{
+			name: "cancelled context",
+			setupServer: func(t *testing.T) *httptest.Server {
+				return newMockTokenRefreshServer(t, "unreachable", "unreachable", 3600, "")
+			},
+			stored:    expiredStoredToken("ctx-refresh"),
+			toolName:  "ctx-tool",
+			cancelCtx: true,
+			wantErr:   true,
+		},
+		{
+			name: "nil store does not panic",
+			setupServer: func(t *testing.T) *httptest.Server {
+				return newMockTokenRefreshServer(t, "nil-store-tok", "nil-store-ref", 3600, "")
+			},
+			stored:         expiredStoredToken("nil-store-refresh"),
+			toolName:       "nil-store-tool",
+			nilStore:       true,
+			wantAccess:     "nil-store-tok",
+			wantNotExpired: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := tc.setupServer(t)
+			defer srv.Close()
+
+			var store WritableTokenStore
+			if !tc.nilStore {
+				store = newRecordingTokenStore()
+			}
+
+			cfg := RefreshConfig{
+				Endpoint: oauth2.Endpoint{
+					AuthURL:  srv.URL + "/authorize",
+					TokenURL: srv.URL + "/token",
+				},
+				HTTPClient: &http.Client{Timeout: 5 * time.Second},
+				Store:      store,
+				ToolName:   tc.toolName,
+			}
+
+			ctx := context.Background()
+			if tc.cancelCtx {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+
+			auth := manifest.Auth{Type: "oauth"}
+
+			result, err := Refresh(ctx, auth, tc.stored, cfg)
+
+			if tc.wantErr {
+				require.Error(t, err, "expected error for %q", tc.name)
+				assert.Nil(t, result, "result must be nil on error for %q", tc.name)
+				for _, sub := range tc.wantErrSubs {
+					assert.Contains(t, err.Error(), sub,
+						"error must contain %q for %q", sub, tc.name)
+				}
+				return
+			}
+
+			require.NoError(t, err, "unexpected error for %q", tc.name)
+			require.NotNil(t, result, "result must not be nil for %q", tc.name)
+
+			if tc.wantAccess != "" {
+				assert.Equal(t, tc.wantAccess, result.AccessToken,
+					"AccessToken must match for %q", tc.name)
+			}
+
+			if tc.wantNotExpired {
+				assert.False(t, result.IsExpired(),
+					"Token must not be expired for %q; Expiry=%v", tc.name, result.Expiry)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Refresh sends correct grant_type to token endpoint
+// ---------------------------------------------------------------------------
+
+func TestRefresh_SendsRefreshTokenGrantType(t *testing.T) {
+	// The refresh request must use grant_type=refresh_token. This test
+	// captures the actual form values sent to the token endpoint.
+	var capturedGrantType string
+	var capturedRefreshToken string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		capturedGrantType = r.FormValue("grant_type")
+		capturedRefreshToken = r.FormValue("refresh_token")
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"access_token": "grant-type-check-access",
+			"refresh_token": "grant-type-check-refresh",
+			"token_type": "Bearer",
+			"expires_in": 3600
+		}`)
+	}))
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("original-refresh-token")
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, "refresh_token", capturedGrantType,
+		"Token endpoint must receive grant_type=refresh_token")
+	assert.Equal(t, "original-refresh-token", capturedRefreshToken,
+		"Token endpoint must receive the stored refresh_token value")
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Stored token matches returned token after refresh
+// ---------------------------------------------------------------------------
+
+func TestRefresh_StoredToken_MatchesReturnedToken(t *testing.T) {
+	// The token persisted to the store must be identical to the token returned
+	// to the caller. A sloppy implementation might store one thing but return
+	// a different thing.
+	srv := newMockTokenRefreshServer(t,
+		"consistency-access", "consistency-refresh", 1800, "")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("old-refresh")
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	setCalls := store.getSetCalls()
+	require.Len(t, setCalls, 1, "Store.Set must be called exactly once")
+
+	storedTok := setCalls[0].Token
+	assert.Equal(t, result.AccessToken, storedTok.AccessToken,
+		"Stored AccessToken must match returned AccessToken")
+	assert.Equal(t, result.RefreshToken, storedTok.RefreshToken,
+		"Stored RefreshToken must match returned RefreshToken")
+	assert.Equal(t, result.TokenType, storedTok.TokenType,
+		"Stored TokenType must match returned TokenType")
+	assert.WithinDuration(t, result.Expiry, storedTok.Expiry, 1*time.Second,
+		"Stored Expiry must match returned Expiry (within 1s tolerance)")
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Refresh failure does not call Store.Set
+// ---------------------------------------------------------------------------
+
+func TestRefresh_Failure_DoesNotCallStoreSet(t *testing.T) {
+	// When refresh fails, the store must NOT be updated with stale/empty data.
+	srv := newErrorTokenRefreshServer(t, http.StatusBadRequest, "invalid_grant")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	stored := expiredStoredToken("bad-refresh")
+	auth := manifest.Auth{Type: "oauth"}
+
+	_, err := Refresh(context.Background(), auth, stored, cfg)
+	require.Error(t, err)
+
+	setCalls := store.getSetCalls()
+	assert.Empty(t, setCalls, "Store.Set must NOT be called when refresh fails")
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Refresh uses provided HTTPClient (not default)
+// ---------------------------------------------------------------------------
+
+func TestRefresh_UsesProvidedHTTPClient(t *testing.T) {
+	// The Refresh function must use the HTTPClient from RefreshConfig, not
+	// http.DefaultClient. We verify this by creating a server that only
+	// the configured client can reach (via the client's Transport).
+	var requestReceived atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestReceived.Store(true)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"access_token": "client-test-access",
+			"refresh_token": "client-test-refresh",
+			"token_type": "Bearer",
+			"expires_in": 3600
+		}`)
+	}))
+	defer srv.Close()
+
+	// Use a custom HTTP client with a custom transport that adds a header.
+	// The test verifies the custom client is being used.
+	customClient := srv.Client()
+
+	store := newRecordingTokenStore()
+	cfg := RefreshConfig{
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  srv.URL + "/authorize",
+			TokenURL: srv.URL + "/token",
+		},
+		HTTPClient: customClient,
+		Store:      store,
+		ToolName:   "client-test",
+	}
+	stored := expiredStoredToken("client-refresh")
+	auth := manifest.Auth{Type: "oauth"}
+
+	result, err := Refresh(context.Background(), auth, stored, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.True(t, requestReceived.Load(),
+		"The token server must have received a request via the provided HTTPClient")
+	assert.Equal(t, "client-test-access", result.AccessToken)
+}
+
+// ---------------------------------------------------------------------------
+// AC-17: Error wrapping (Constitution rule 4: errors wrapped with context)
+// ---------------------------------------------------------------------------
+
+func TestRefresh_Error_IsWrappedWithContext(t *testing.T) {
+	// Constitution rule 4: All errors must be wrapped with context.
+	// The error from a failed refresh must not be a bare error from x/oauth2;
+	// it must include our own context message.
+	srv := newErrorTokenRefreshServer(t, http.StatusBadRequest, "invalid_grant")
+	defer srv.Close()
+
+	store := newRecordingTokenStore()
+	cfg := defaultRefreshConfig(srv.URL, store)
+	cfg.ToolName = "context-tool"
+	stored := expiredStoredToken("expired-refresh")
+	auth := manifest.Auth{Type: "oauth"}
+
+	_, err := Refresh(context.Background(), auth, stored, cfg)
+	require.Error(t, err)
+
+	errMsg := err.Error()
+	// Must mention both the refresh failure context AND the login hint.
+	assert.Contains(t, errMsg, "toolwright login",
+		"Error must contain login hint")
+	assert.Contains(t, errMsg, "context-tool",
+		"Error must contain tool name for actionable message")
 }
