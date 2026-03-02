@@ -1,0 +1,48 @@
+{
+  "workId": "manifest",
+  "timestamp": "2026-03-02T13:25:00Z",
+  "findings": [
+    {
+      "category": "build",
+      "source": "plan.md as-built notes",
+      "description": "Tasks 2+3 merged because types and parser share a test surface — can't test parsing without types",
+      "proposedRule": "Merge tightly coupled tasks at build time when they share a test surface",
+      "disposition": "promoted:patterns:P1"
+    },
+    {
+      "category": "architecture",
+      "source": "internal/schema/validator.go",
+      "description": "Schema validator accepts fs.FS instead of embed.FS, enabling trivial testing with fstest.MapFS",
+      "proposedRule": "Components reading embedded files accept fs.FS (not embed.FS) for testability",
+      "disposition": "promoted:constitution:17a"
+    },
+    {
+      "category": "architecture",
+      "source": "plan.md as-built notes (task 6 deferred)",
+      "description": "schemas/toolwright.schema.json deferred — no production consumer exists yet. Tests use inline fstest.MapFS.",
+      "proposedRule": "Defer embedded assets until a production consumer exists; use fstest.MapFS in tests",
+      "disposition": "promoted:patterns:P2"
+    },
+    {
+      "category": "build",
+      "source": "internal/manifest/types.go Auth.UnmarshalYAML",
+      "description": "Used type authAlias Auth to avoid infinite recursion in custom UnmarshalYAML that supports scalar + object",
+      "proposedRule": "Use type alias inside UnmarshalYAML to decode mapping nodes without infinite recursion",
+      "disposition": "promoted:auto-memory"
+    },
+    {
+      "category": "build",
+      "source": "internal/manifest/types.go Example.MarshalYAML",
+      "description": "Go omitempty treats nil and empty slice the same; custom MarshalYAML needed to preserve args: [] vs omitted",
+      "proposedRule": "Add custom MarshalYAML with non-omitempty alias when empty-slice semantics matter",
+      "disposition": "promoted:auto-memory"
+    },
+    {
+      "category": "testing",
+      "source": "gate-wiring evidence",
+      "description": "4 INFO findings about unused exports — all expected for a foundation unit in a leaf-first build",
+      "proposedRule": "Foundation unit wiring INFO about unused exports is expected; resolves as downstream units consume them",
+      "disposition": "promoted:patterns:P3"
+    }
+  ]
+}

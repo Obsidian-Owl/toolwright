@@ -25,6 +25,7 @@
 15. CLI commands in `internal/cli/` are thin — they parse flags and delegate to domain packages.
 16. Each domain package (`manifest`, `schema`, `auth`, `runner`, `codegen`, `testing`) has a single clear responsibility.
 17. No circular dependencies between internal packages.
+17a. Components reading embedded files accept `fs.FS` (not `embed.FS`) for testability with `fstest.MapFS`.
 
 ## Output & UX
 

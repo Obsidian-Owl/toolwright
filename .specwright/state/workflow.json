@@ -3,29 +3,23 @@
   "currentWork": {
     "id": "toolwright-core",
     "description": "Design and implement Toolwright CLI framework from spec",
-    "status": "verified",
-    "workDir": ".specwright/work/toolwright-core/units/manifest",
-    "unitId": "manifest",
-    "tasksTotal": 4,
-    "tasksCompleted": ["task-1-scaffold", "task-2-types-parser", "task-3-validation", "task-4-schema"],
+    "status": "building",
+    "workDir": ".specwright/work/toolwright-core/units/auth",
+    "unitId": "auth",
+    "tasksTotal": null,
+    "tasksCompleted": [],
     "currentTask": null,
     "intensity": "full"
   },
-  "gates": {
-    "build": { "verdict": "PASS", "timestamp": "2026-03-02T13:15:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } },
-    "tests": { "verdict": "PASS", "timestamp": "2026-03-02T13:15:00Z", "findings": { "block": 0, "warn": 0, "info": 0 }, "testCount": 248 },
-    "security": { "verdict": "PASS", "timestamp": "2026-03-02T13:15:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } },
-    "wiring": { "verdict": "PASS", "timestamp": "2026-03-02T13:15:00Z", "findings": { "block": 0, "warn": 0, "info": 4 } },
-    "spec": { "verdict": "PASS", "timestamp": "2026-03-02T13:15:00Z", "findings": { "block": 0, "warn": 0, "info": 0 }, "coverage": "12/12" }
-  },
+  "gates": {},
   "workUnits": [
-    { "id": "manifest", "description": "Go module, project structure, manifest types/parser/validation, JSON Schema validator", "status": "verified", "order": 1, "workDir": ".specwright/work/toolwright-core/units/manifest" },
-    { "id": "auth", "description": "Token resolver chain, keyring storage, fallback file store, OAuth 2.1 PKCE flow", "status": "planned", "order": 2, "workDir": ".specwright/work/toolwright-core/units/auth" },
+    { "id": "manifest", "description": "Go module, project structure, manifest types/parser/validation, JSON Schema validator", "status": "shipped", "order": 1, "workDir": ".specwright/work/toolwright-core/units/manifest", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/1" },
+    { "id": "auth", "description": "Token resolver chain, keyring storage, fallback file store, OAuth 2.1 PKCE flow", "status": "building", "order": 2, "workDir": ".specwright/work/toolwright-core/units/auth" },
     { "id": "runner", "description": "Process execution, arg mapping, token injection, timeout, output capture", "status": "planned", "order": 3, "workDir": ".specwright/work/toolwright-core/units/runner" },
     { "id": "testing", "description": "Test YAML parser, JSONPath assertions, TAP + JSON output", "status": "planned", "order": 4, "workDir": ".specwright/work/toolwright-core/units/testing" },
     { "id": "codegen", "description": "Generator interface, Go CLI templates, TypeScript MCP templates", "status": "planned", "order": 5, "workDir": ".specwright/work/toolwright-core/units/codegen" },
     { "id": "cli", "description": "Cobra commands, TUI wizard, init scaffolding, AI generation, main.go", "status": "planned", "order": 6, "workDir": ".specwright/work/toolwright-core/units/cli" }
   ],
   "lock": null,
-  "lastUpdated": "2026-03-02T13:15:00Z"
+  "lastUpdated": "2026-03-02T13:20:00Z"
 }
