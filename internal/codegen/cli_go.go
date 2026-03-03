@@ -161,7 +161,8 @@ type rootGoData struct {
 }
 
 type flagData struct {
-	Name        string
+	Name        string // original flag name used in string literals (e.g., "dry-run")
+	GoName      string // sanitized Go identifier (e.g., "dryRun")
 	GoType      string
 	Required    bool
 	Default     any
@@ -171,7 +172,8 @@ type flagData struct {
 }
 
 type argData struct {
-	Name        string
+	Name        string // original arg name used in string literals
+	GoName      string // sanitized Go identifier
 	GoType      string
 	Required    bool
 	Description string
@@ -179,7 +181,8 @@ type argData struct {
 
 type toolGoData struct {
 	ToolkitName string
-	ToolName    string
+	ToolName    string // original name used in string literals (e.g., "check-health")
+	GoName      string // sanitized Go identifier (e.g., "checkHealth")
 	Description string
 	Args        []argData
 	Flags       []flagData
@@ -213,6 +216,18 @@ type loginGoData struct {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// goIdentifier converts a hyphenated name to a valid Go camelCase identifier.
+// For example, "check-health" becomes "checkHealth" and "deploy-app" becomes "deployApp".
+func goIdentifier(name string) string {
+	parts := strings.Split(name, "-")
+	for i := 1; i < len(parts); i++ {
+		if len(parts[i]) > 0 {
+			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+		}
+	}
+	return strings.Join(parts, "")
+}
 
 // goType maps a manifest type string to a Go type string.
 func goType(manifestType string) string {
@@ -255,6 +270,7 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 	for i, a := range tool.Args {
 		args[i] = argData{
 			Name:        a.Name,
+			GoName:      goIdentifier(a.Name),
 			GoType:      goType(a.Type),
 			Required:    a.Required,
 			Description: a.Description,
@@ -265,6 +281,7 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 	for i, f := range tool.Flags {
 		flags[i] = flagData{
 			Name:        f.Name,
+			GoName:      goIdentifier(f.Name),
 			GoType:      goType(f.Type),
 			Required:    f.Required,
 			Default:     f.Default,
@@ -282,6 +299,7 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 	return toolGoData{
 		ToolkitName: m.Metadata.Name,
 		ToolName:    tool.Name,
+		GoName:      goIdentifier(tool.Name),
 		Description: tool.Description,
 		Args:        args,
 		Flags:       flags,
@@ -461,35 +479,36 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// {{.ToolName}}Cmd is the Cobra command for the {{.ToolName}} tool.
+// {{.GoName}}Cmd is the Cobra command for the {{.ToolName}} tool.
 {{- $toolName := .ToolName}}
+{{- $goName := .GoName}}
 {{- $hasAuth := .HasAuth}}
 {{- $authType := .AuthType}}
 {{- $tokenEnv := .TokenEnv}}
 {{- $tokenFlag := .TokenFlag}}
 var (
 {{- range .Flags}}
-	{{$toolName}}Flag{{.Name}} {{.GoType}}
+	{{$goName}}Flag{{.GoName}} {{.GoType}}
 {{- end}}
 {{- if $hasAuth}}
-	{{$toolName}}Token string
+	{{$goName}}Token string
 {{- end}}
 )
 
 func init() {
 {{- range .Flags}}
-	{{$toolName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$toolName}}Flag{{.Name}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description}}{{if .Enum}} (allowed: {{joinStrings .Enum ", "}}){{end}}")
+	{{$goName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description}}{{if .Enum}} (allowed: {{joinStrings .Enum ", "}}){{end}}")
 {{- if .Required}}
-	_ = {{$toolName}}Cmd.MarkFlagRequired("{{.Name}}")
+	_ = {{$goName}}Cmd.MarkFlagRequired("{{.Name}}")
 {{- end}}
 {{- end}}
 {{- if $hasAuth}}
-	{{$toolName}}Cmd.Flags().StringVar(&{{$toolName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv}} env var)")
+	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv}} env var)")
 {{- end}}
-	rootCmd.AddCommand({{$toolName}}Cmd)
+	rootCmd.AddCommand({{$goName}}Cmd)
 }
 
-var {{.ToolName}}Cmd = &cobra.Command{
+var {{.GoName}}Cmd = &cobra.Command{
 	Use:   "{{.ToolName}}{{range .Args}} <{{.Name}}>{{end}}",
 	Short: "{{.Description}}",
 	Long:  "{{.Description}}",
@@ -498,15 +517,15 @@ var {{.ToolName}}Cmd = &cobra.Command{
 {{- end}}
 	RunE: func(cmd *cobra.Command, args []string) error {
 {{- range $i, $a := .Args}}
-		var arg{{$a.Name}} {{$a.GoType}} //nolint:ineffassign // positional arg {{$a.Name}} index {{$i}}
-		_ = arg{{$a.Name}}
+		var arg{{$a.GoName}} {{$a.GoType}} //nolint:ineffassign // positional arg {{$a.Name}} index {{$i}}
+		_ = arg{{$a.GoName}}
 		if len(args) > {{$i}} {
 			_ = fmt.Sprintf("%v", args[{{$i}}]) // arg: {{$a.Name}} ({{$a.GoType}})
 		}
 {{- end}}
 {{- if $hasAuth}}
 		// Resolve auth token: prefer flag, fall back to env var.
-		token := {{$toolName}}Token
+		token := {{$goName}}Token
 		if token == "" {
 			token = os.Getenv("{{$tokenEnv}}")
 		}
