@@ -77,7 +77,9 @@ func (e *Executor) Run(ctx context.Context, tool manifest.Tool, args []string, f
 	argv := BuildArgs(tool, args, flags, token)
 
 	// Use exec.Command (not CommandContext) so we control process group killing ourselves.
-	cmd := exec.Command(entrypoint, argv...)
+	// CommandContext only sends SIGKILL to the parent PID; we need Kill(-pgid) for the
+	// entire process group. The goroutine below handles context cancellation manually.
+	cmd := exec.Command(entrypoint, argv...) //nolint:noctx // intentional: process group kill
 	cmd.Dir = e.WorkDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
