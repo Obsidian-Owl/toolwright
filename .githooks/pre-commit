@@ -22,3 +22,8 @@ fi
 
 # Run go vet.
 go vet ./...
+
+# Run golangci-lint on changes since the last commit.
+if command -v golangci-lint &>/dev/null; then
+  golangci-lint run --new-from-rev=HEAD ./...
+fi
