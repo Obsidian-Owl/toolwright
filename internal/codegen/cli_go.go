@@ -470,11 +470,7 @@ const toolGoTmpl = `package commands
 import (
 	"fmt"
 	"os"
-{{- if .HasAuth}}
 	"os/exec"
-{{- else}}
-	"os/exec"
-{{- end}}
 
 	"github.com/spf13/cobra"
 )
