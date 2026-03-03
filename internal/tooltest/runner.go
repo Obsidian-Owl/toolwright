@@ -16,6 +16,8 @@ import (
 const DefaultTimeout = 30 * time.Second
 
 // ToolExecutor abstracts running a single tool invocation.
+// Implementations must not include the token value in returned errors,
+// as errors are surfaced in test output (constitution rule 23).
 type ToolExecutor interface {
 	Run(ctx context.Context, tool manifest.Tool, args []string, flags map[string]string, token string) (*runner.Result, error)
 }

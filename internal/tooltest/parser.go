@@ -2,6 +2,7 @@ package tooltest
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,10 @@ import (
 
 	"go.yaml.in/yaml/v3"
 )
+
+// maxTestFileBytes is the maximum size of a .test.yaml file (1 MiB).
+// Prevents memory exhaustion from oversized inputs (constitution rule 26).
+const maxTestFileBytes = 1 << 20
 
 // yamlAssertion mirrors Assertion with yaml tags for unmarshaling.
 // Pointer fields ensure zero-value vs explicit-false are distinguishable.
@@ -50,6 +55,9 @@ type yamlTestSuite struct {
 // If raw matches "${VAR_NAME}", it returns os.Getenv("VAR_NAME").
 // If raw is empty, it checks TOOLWRIGHT_TEST_TOKEN as a fallback.
 // Otherwise it returns raw unchanged.
+//
+// Tokens are sourced from env vars here (CI convenience) but delivered
+// to tool entrypoints via CLI flags by runner.BuildArgs (constitution rule 24).
 func expandAuthToken(raw string) string {
 	if strings.HasPrefix(raw, "${") && strings.HasSuffix(raw, "}") {
 		varName := raw[2 : len(raw)-1]
@@ -104,9 +112,18 @@ func convertTestCase(yc yamlTestCase) (TestCase, error) {
 
 // ParseTestFile parses a single .test.yaml file into a TestSuite.
 func ParseTestFile(path string) (*TestSuite, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // path comes from controlled inputs (glob or caller-provided)
+	f, err := os.Open(path) //nolint:gosec // path comes from controlled inputs (glob or caller-provided)
 	if err != nil {
 		return nil, fmt.Errorf("read test file %q: %w", path, err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxTestFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read test file %q: %w", path, err)
+	}
+	if len(data) > maxTestFileBytes {
+		return nil, fmt.Errorf("test file %q exceeds maximum size of %d bytes", path, maxTestFileBytes)
 	}
 
 	var raw yamlTestSuite
