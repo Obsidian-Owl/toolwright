@@ -1,0 +1,612 @@
+package codegen
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"text/template"
+
+	"github.com/Obsidian-Owl/toolwright/internal/manifest"
+)
+
+// TSMCPGenerator generates TypeScript MCP server projects.
+type TSMCPGenerator struct{}
+
+// NewTSMCPGenerator returns a new TSMCPGenerator.
+func NewTSMCPGenerator() *TSMCPGenerator {
+	return &TSMCPGenerator{}
+}
+
+// Mode returns the generation mode for this generator.
+func (g *TSMCPGenerator) Mode() string { return "mcp" }
+
+// Target returns the generation target for this generator.
+func (g *TSMCPGenerator) Target() string { return "typescript" }
+
+// Generate produces TypeScript MCP server project files from the given template data.
+func (g *TSMCPGenerator) Generate(ctx context.Context, data TemplateData, _ string) ([]GeneratedFile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("generate cancelled: %w", err)
+	}
+
+	m := data.Manifest
+	transport := m.Generate.MCP.Transport
+	hasStdio := containsTransport(transport, "stdio")
+	hasStreamableHTTP := containsTransport(transport, "streamable-http")
+
+	var files []GeneratedFile
+
+	// src/index.ts
+	indexData := buildIndexData(m, hasStdio, hasStreamableHTTP)
+	indexFile, err := renderTSTemplate("src/index.ts", indexTSTmpl, indexData)
+	if err != nil {
+		return nil, fmt.Errorf("rendering src/index.ts: %w", err)
+	}
+	files = append(files, GeneratedFile{Path: "src/index.ts", Content: indexFile})
+
+	// per-tool handler files
+	for _, tool := range m.Tools {
+		auth := m.ResolvedAuth(tool)
+		toolData := buildTSToolData(tool, auth)
+		var toolFile []byte
+		toolFile, err = renderTSTemplate("tool.ts", tsToolTmpl, toolData)
+		if err != nil {
+			return nil, fmt.Errorf("rendering tool file for %q: %w", tool.Name, err)
+		}
+		files = append(files, GeneratedFile{
+			Path:    "src/tools/" + tool.Name + ".ts",
+			Content: toolFile,
+		})
+	}
+
+	// src/search.ts — progressive discovery meta-tool
+	searchData := buildSearchData(m)
+	searchFile, err := renderTSTemplate("src/search.ts", searchTSTmpl, searchData)
+	if err != nil {
+		return nil, fmt.Errorf("rendering src/search.ts: %w", err)
+	}
+	files = append(files, GeneratedFile{Path: "src/search.ts", Content: searchFile})
+
+	// package.json
+	pkgFile, err := renderTSTemplate("package.json", packageJSONTmpl, packageJSONData{
+		ToolkitName: m.Metadata.Name,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rendering package.json: %w", err)
+	}
+	files = append(files, GeneratedFile{Path: "package.json", Content: pkgFile})
+
+	// tsconfig.json
+	tsconfigFile, err := renderTSTemplate("tsconfig.json", tsconfigTmpl, nil)
+	if err != nil {
+		return nil, fmt.Errorf("rendering tsconfig.json: %w", err)
+	}
+	files = append(files, GeneratedFile{Path: "tsconfig.json", Content: tsconfigFile})
+
+	// README.md
+	readmeTSFile, err := renderTSTemplate("README.md", readmeTSTmpl, readmeTSData{
+		ToolkitName:        m.Metadata.Name,
+		ToolkitDescription: m.Metadata.Description,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("rendering README.md: %w", err)
+	}
+	files = append(files, GeneratedFile{Path: "README.md", Content: readmeTSFile})
+
+	// Conditional: src/auth/middleware.ts — if any tool has token or oauth2 auth
+	if hasAuthType(m, "token") || hasAuthType(m, "oauth2") {
+		middlewareFile, err := renderTSTemplate("middleware.ts", middlewareTSTmpl, nil)
+		if err != nil {
+			return nil, fmt.Errorf("rendering src/auth/middleware.ts: %w", err)
+		}
+		files = append(files, GeneratedFile{Path: "src/auth/middleware.ts", Content: middlewareFile})
+	}
+
+	// Conditional: src/auth/metadata.ts — only if oauth2 AND streamable-http transport
+	if hasAuthType(m, "oauth2") && hasStreamableHTTP {
+		metaData := buildMetadataData(m)
+		metadataFile, err := renderTSTemplate("metadata.ts", metadataTSTmpl, metaData)
+		if err != nil {
+			return nil, fmt.Errorf("rendering src/auth/metadata.ts: %w", err)
+		}
+		files = append(files, GeneratedFile{Path: "src/auth/metadata.ts", Content: metadataFile})
+	}
+
+	return files, nil
+}
+
+// ---------------------------------------------------------------------------
+// Template data structs
+// ---------------------------------------------------------------------------
+
+type tsToolSummary struct {
+	Name        string
+	Description string
+}
+
+type tsArgData struct {
+	Name        string
+	TSType      string
+	Required    bool
+	Description string
+}
+
+type tsFlagData struct {
+	Name        string
+	TSType      string
+	Required    bool
+	Description string
+}
+
+type tsToolData struct {
+	ToolName    string
+	Description string
+	Args        []tsArgData
+	Flags       []tsFlagData
+	HasAuth     bool
+	AuthType    string
+	TokenEnv    string
+}
+
+type indexData struct {
+	ToolkitName       string
+	Tools             []tsToolSummary
+	HasStdio          bool
+	HasStreamableHTTP bool
+}
+
+type searchData struct {
+	Tools []tsToolSummary
+}
+
+type packageJSONData struct {
+	ToolkitName string
+}
+
+type readmeTSData struct {
+	ToolkitName        string
+	ToolkitDescription string
+}
+
+type metadataTSData struct {
+	ProviderURL string
+	Scopes      []string
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// tsType maps a manifest type string to a TypeScript type string.
+func tsType(manifestType string) string {
+	switch manifestType {
+	case "int", "float":
+		return "number"
+	case "bool":
+		return "boolean"
+	default:
+		return "string"
+	}
+}
+
+// containsTransport returns true if the transport slice contains the given value.
+func containsTransport(transport []string, value string) bool {
+	for _, t := range transport {
+		if t == value {
+			return true
+		}
+	}
+	return false
+}
+
+// buildIndexData constructs indexData for the index.ts template.
+func buildIndexData(m manifest.Toolkit, hasStdio, hasStreamableHTTP bool) indexData {
+	summaries := make([]tsToolSummary, len(m.Tools))
+	for i, t := range m.Tools {
+		summaries[i] = tsToolSummary{Name: t.Name, Description: t.Description}
+	}
+	return indexData{
+		ToolkitName:       m.Metadata.Name,
+		Tools:             summaries,
+		HasStdio:          hasStdio,
+		HasStreamableHTTP: hasStreamableHTTP,
+	}
+}
+
+// buildTSToolData constructs tsToolData for a single tool.
+func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
+	args := make([]tsArgData, len(tool.Args))
+	for i, a := range tool.Args {
+		args[i] = tsArgData{
+			Name:        a.Name,
+			TSType:      tsType(a.Type),
+			Required:    a.Required,
+			Description: a.Description,
+		}
+	}
+	flags := make([]tsFlagData, len(tool.Flags))
+	for i, f := range tool.Flags {
+		flags[i] = tsFlagData{
+			Name:        f.Name,
+			TSType:      tsType(f.Type),
+			Required:    f.Required,
+			Description: f.Description,
+		}
+	}
+	hasAuth := auth.Type == "token" || auth.Type == "oauth2"
+	return tsToolData{
+		ToolName:    tool.Name,
+		Description: tool.Description,
+		Args:        args,
+		Flags:       flags,
+		HasAuth:     hasAuth,
+		AuthType:    auth.Type,
+		TokenEnv:    auth.TokenEnv,
+	}
+}
+
+// buildSearchData constructs searchData for the search.ts template.
+func buildSearchData(m manifest.Toolkit) searchData {
+	summaries := make([]tsToolSummary, len(m.Tools))
+	for i, t := range m.Tools {
+		summaries[i] = tsToolSummary{Name: t.Name, Description: t.Description}
+	}
+	return searchData{Tools: summaries}
+}
+
+// buildMetadataData constructs metadataTSData from the manifest's oauth2 auth config.
+func buildMetadataData(m manifest.Toolkit) metadataTSData {
+	var providerURL string
+	var scopes []string
+	for _, tool := range m.Tools {
+		auth := m.ResolvedAuth(tool)
+		if auth.Type == "oauth2" {
+			providerURL = auth.ProviderURL
+			scopes = auth.Scopes
+			break
+		}
+	}
+	return metadataTSData{
+		ProviderURL: providerURL,
+		Scopes:      scopes,
+	}
+}
+
+// renderTSTemplate executes a named template with the given data and returns the
+// rendered bytes.
+func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
+	funcMap := template.FuncMap{
+		"joinStrings": strings.Join,
+		"tsType":      tsType,
+	}
+	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing template %q: %w", name, err)
+	}
+	var buf strings.Builder
+	if err := t.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("executing template %q: %w", name, err)
+	}
+	return []byte(buf.String()), nil
+}
+
+// ---------------------------------------------------------------------------
+// Templates
+// ---------------------------------------------------------------------------
+
+const indexTSTmpl = `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+{{- if .HasStdio}}
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+{{- end}}
+{{- if .HasStreamableHTTP}}
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+{{- end}}
+import { z } from "zod";
+
+// Import tool handlers
+{{- range .Tools}}
+import { register as register_{{.Name}} } from "./tools/{{.Name}}.js";
+{{- end}}
+import { register as register_search_tools } from "./search.js";
+
+// Create the MCP server for {{.ToolkitName}}
+const server = new McpServer({
+  name: "{{.ToolkitName}}",
+  version: "1.0.0",
+});
+
+// Register all tools
+{{- range .Tools}}
+register_{{.Name}}(server);
+{{- end}}
+register_search_tools(server);
+
+// Start the server with the configured transport
+async function main() {
+{{- if .HasStdio}}
+  const stdioTransport = new StdioServerTransport();
+  await server.connect(stdioTransport);
+  console.error("{{.ToolkitName}} MCP server running via stdio");
+{{- end}}
+{{- if .HasStreamableHTTP}}
+  // Streamable HTTP transport setup
+  const httpTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  console.error("{{.ToolkitName}} MCP server ready for streamable-http connections");
+{{- end}}
+}
+
+main().catch(console.error);
+
+export { server };
+`
+
+const tsToolTmpl = `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+{{- if .HasAuth}}
+import { validateRequest } from "../auth/middleware.js";
+{{- end}}
+
+// Tool: {{.ToolName}}
+// Description: {{.Description}}
+
+// Input schema for {{.ToolName}}
+const inputSchema = z.object({
+{{- range .Args}}
+  {{.Name}}: z.{{.TSType}}().describe("{{.Description}}"),{{if not .Required}}// optional{{end}}
+{{- end}}
+{{- range .Flags}}
+  {{.Name}}: z.{{.TSType}}(){{if not .Required}}.optional(){{end}}.describe("{{.Description}}"),
+{{- end}}
+});
+
+type {{.ToolName}}Input = z.infer<typeof inputSchema>;
+
+/**
+ * Handler for the {{.ToolName}} tool.
+ * {{.Description}}
+ */
+async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ content: Array<{ type: string; text: string }> }> {
+{{- if .HasAuth}}
+  // Resolve auth: read from environment variable {{.TokenEnv}}
+  const envToken = process.env["{{.TokenEnv}}"];
+  if (!envToken) {
+    throw new Error("auth required: set the {{.TokenEnv}} environment variable");
+  }
+{{- end}}
+{{- range .Args}}
+  const {{.Name}}: {{.TSType}} = input.{{.Name}};
+{{- end}}
+{{- range .Flags}}
+  const {{.Name}}: {{.TSType}} | undefined = input.{{.Name}};
+{{- end}}
+  // TODO: implement {{.ToolName}} logic
+  return {
+    content: [{ type: "text", text: "{{.ToolName}} executed" }],
+  };
+}
+
+/**
+ * Register the {{.ToolName}} tool with the MCP server.
+ */
+export function register(server: McpServer): void {
+  server.tool(
+    "{{.ToolName}}",
+    "{{.Description}}",
+    inputSchema.shape,
+    async (input: {{.ToolName}}Input) => {
+      return handle_{{.ToolName}}(input);
+    },
+  );
+}
+
+export default handle_{{.ToolName}};
+`
+
+const searchTSTmpl = `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+// search_tools — progressive discovery meta-tool
+// Allows agents to search available tools by name and description before
+// fetching full schemas. This enables progressive discovery: call search_tools
+// first to find relevant tools, then call the specific tool.
+
+interface ToolEntry {
+  name: string;
+  description: string;
+}
+
+// Registry of all available tools with their names and descriptions
+const toolRegistry: ToolEntry[] = [
+{{- range .Tools}}
+  { name: "{{.Name}}", description: "{{.Description}}" },
+{{- end}}
+];
+
+/**
+ * Search available tools by query string.
+ * Returns tools whose name or description matches the query.
+ * Supports progressive discovery by exposing tool names and descriptions.
+ */
+export function searchTools(query: string): ToolEntry[] {
+  if (!query || query.trim() === "") {
+    return toolRegistry;
+  }
+  const q = query.toLowerCase();
+  return toolRegistry.filter(
+    (t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
+  );
+}
+
+/**
+ * Register the search_tools meta-tool with the MCP server.
+ * This tool enables agents to list and search available tools for progressive discovery.
+ */
+export function register(server: McpServer): void {
+  server.tool(
+    "search_tools",
+    "Search available tools by name and description for progressive discovery",
+    {
+      query: z.string().optional().describe("Search query to filter tools by name or description"),
+    },
+    async (input: { query?: string }) => {
+      const results = searchTools(input.query ?? "");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(results, null, 2),
+          },
+        ],
+      };
+    },
+  );
+}
+`
+
+const packageJSONTmpl = `{
+  "name": "{{.ToolkitName}}",
+  "version": "1.0.0",
+  "description": "MCP server generated by toolwright",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0"
+  }
+}
+`
+
+const tsconfigTmpl = `{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+`
+
+const readmeTSTmpl = `# {{.ToolkitName}}
+
+{{.ToolkitDescription}}
+
+## Setup
+
+` + "```" + `sh
+npm install
+npm run build
+` + "```" + `
+
+## Usage
+
+` + "```" + `sh
+npm start
+` + "```" + `
+
+## Tools
+
+This MCP server was generated by [toolwright](https://github.com/Obsidian-Owl/toolwright).
+`
+
+const middlewareTSTmpl = `import { Request, Response, NextFunction } from "express";
+
+// The Authorization header scheme used by this server.
+const AUTH_SCHEME = "Bearer";
+
+/**
+ * validateBearerToken extracts and validates the Authorization header.
+ * Returns the token string if valid, or throws an error for unauthorized requests.
+ */
+export function validateBearerToken(authHeader: string | undefined): string {
+  if (!authHeader) {
+    throw new UnauthorizedError("Missing Authorization header");
+  }
+  const schemePrefix = AUTH_SCHEME + " ";
+  if (!authHeader.startsWith(schemePrefix)) {
+    throw new UnauthorizedError("Authorization header must specify a valid auth token");
+  }
+  const token = authHeader.slice(schemePrefix.length).trim();
+  if (!token) {
+    throw new UnauthorizedError("Auth token value is empty");
+  }
+  return token;
+}
+
+/**
+ * UnauthorizedError represents a 401 unauthorized error.
+ */
+export class UnauthorizedError extends Error {
+  readonly statusCode = 401;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "UnauthorizedError";
+  }
+}
+
+/**
+ * validateRequest is Express middleware that enforces token authentication.
+ * Responds with HTTP 401 if the Authorization header is missing or invalid.
+ */
+export function validateRequest(req: Request, res: Response, next: NextFunction): void {
+  try {
+    validateBearerToken(req.headers["authorization"]);
+    next();
+  } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      res.status(401).json({ error: "Unauthorized", message: err.message });
+    } else {
+      next(err);
+    }
+  }
+}
+`
+
+const metadataTSTmpl = `import { Request, Response } from "express";
+
+// OAuth 2.0 Protected Resource Metadata (RFC 9728)
+// Serves the /.well-known/oauth-protected-resource endpoint
+
+const protectedResourceMetadata = {
+  resource: process.env["RESOURCE_URL"] ?? "{{.ProviderURL}}",
+  authorization_servers: ["{{.ProviderURL}}"],
+  scopes_supported: [{{range $i, $s := .Scopes}}{{if $i}}, {{end}}"{{$s}}"{{end}}],
+  bearer_methods_supported: ["header"],
+};
+
+/**
+ * serveProtectedResourceMetadata handles GET requests to
+ * /.well-known/oauth-protected-resource and returns the PRM document.
+ */
+export function serveProtectedResourceMetadata(_req: Request, res: Response): void {
+  res.json(protectedResourceMetadata);
+}
+
+/**
+ * registerMetadataEndpoint registers the /.well-known/oauth-protected-resource
+ * endpoint on the given Express app or router.
+ */
+export function registerMetadataEndpoint(app: {
+  get(path: string, handler: (req: Request, res: Response) => void): void;
+}): void {
+  app.get("/.well-known/oauth-protected-resource", serveProtectedResourceMetadata);
+}
+`
