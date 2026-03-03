@@ -5,12 +5,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 )
+
+// MaxOutputBytes is the maximum number of bytes captured from stdout or stderr.
+// Prevents memory exhaustion from runaway tool output (constitution rule 26).
+const MaxOutputBytes = 10 << 20 // 10 MiB
 
 // BuildArgs assembles the argument slice to pass to a tool's entrypoint.
 // Order: positional args, then flags (in tool.Flags definition order), then token.
@@ -53,16 +60,31 @@ type Executor struct {
 // Non-zero exit codes are captured in Result and do NOT cause an error return.
 // Only true execution failures (entrypoint not found, context cancellation) return an error.
 func (e *Executor) Run(ctx context.Context, tool manifest.Tool, args []string, flags map[string]string, token string) (*Result, error) {
+	// Validate WorkDir exists and is a directory (defense-in-depth, rule 26).
+	if e.WorkDir != "" {
+		info, err := os.Stat(e.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("invalid working directory: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("invalid working directory: %s is not a directory", e.WorkDir)
+		}
+	}
+
+	// Sanitize entrypoint path (defense-in-depth, rule 26).
+	entrypoint := filepath.Clean(tool.Entrypoint)
+
 	argv := BuildArgs(tool, args, flags, token)
 
 	// Use exec.Command (not CommandContext) so we control process group killing ourselves.
-	cmd := exec.Command(tool.Entrypoint, argv...)
+	cmd := exec.Command(entrypoint, argv...)
 	cmd.Dir = e.WorkDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	// Cap output buffers to prevent memory exhaustion (rule 26).
 	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	cmd.Stdout = &limitedWriter{w: &stdoutBuf, remaining: MaxOutputBytes}
+	cmd.Stderr = &limitedWriter{w: &stderrBuf, remaining: MaxOutputBytes}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("tool execution failed: %w", err)
@@ -110,4 +132,23 @@ func (e *Executor) Run(ctx context.Context, tool manifest.Tool, args []string, f
 		Stderr:   stderrBuf.Bytes(),
 		Duration: duration,
 	}, nil
+}
+
+// limitedWriter wraps an io.Writer and silently discards bytes beyond a cap.
+// Prevents memory exhaustion from runaway tool output (constitution rule 26).
+type limitedWriter struct {
+	w         io.Writer
+	remaining int64
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	if lw.remaining <= 0 {
+		return len(p), nil // discard silently
+	}
+	if int64(len(p)) > lw.remaining {
+		p = p[:lw.remaining]
+	}
+	n, err := lw.w.Write(p)
+	lw.remaining -= int64(n)
+	return n, err
 }

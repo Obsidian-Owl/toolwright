@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1332,4 +1333,56 @@ func TestExecutor_BinaryOutput(t *testing.T) {
 
 	assert.Equal(t, []byte("HELLO"), result.Stdout,
 		"binary output must be preserved exactly")
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: Process group kill — child processes are also terminated
+// ---------------------------------------------------------------------------
+
+func TestExecutor_ProcessGroupKill(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+
+	// Parent script spawns a background child (sleep 300), writes its PID
+	// to a file, then waits forever. When the process group is killed,
+	// both parent and child must die.
+	script := writeScript(t, dir, "parent.sh", fmt.Sprintf(`
+sleep 300 &
+echo $! > %s
+wait
+`, pidFile))
+
+	tool := makeToolWithEntrypoint(script, nil)
+	exec := Executor{WorkDir: dir}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := exec.Run(ctx, tool, nil, nil, "")
+	require.Error(t, err, "Run must return an error on context timeout")
+
+	// Read the child PID that the parent wrote before being killed.
+	pidBytes, readErr := os.ReadFile(pidFile)
+	if readErr != nil {
+		// If the PID file wasn't written, the parent was killed before
+		// spawning the child — the test is still valid (nothing to leak).
+		t.Logf("PID file not written (parent killed early): %v", readErr)
+		return
+	}
+
+	var childPID int
+	_, scanErr := fmt.Sscanf(strings.TrimSpace(string(pidBytes)), "%d", &childPID)
+	require.NoError(t, scanErr, "PID file must contain a valid integer")
+
+	// Give the OS a moment to clean up the process table entry.
+	time.Sleep(100 * time.Millisecond)
+
+	// Sending signal 0 checks whether the process exists without affecting it.
+	proc, findErr := os.FindProcess(childPID)
+	if findErr != nil {
+		return // process doesn't exist — good
+	}
+	err = proc.Signal(syscall.Signal(0))
+	assert.Error(t, err,
+		"child process (PID %d) must be killed when process group is terminated", childPID)
 }
