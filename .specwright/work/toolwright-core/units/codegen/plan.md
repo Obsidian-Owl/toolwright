@@ -72,3 +72,54 @@
 | `templates/mcp/typescript/*.qtpl` | Create | templates |
 | `templates/mcp/typescript/*.qtpl.go` | Create (generated) | templates |
 | `go.mod` | Update | root (add quicktemplate) |
+
+## As-Built Notes
+
+### Plan Deviations
+
+1. **text/template instead of quicktemplate**: Used Go's `text/template` with inline string
+   constants rather than quicktemplate `.qtpl` files. Rationale: simpler build (no external
+   `qtc` tool), no generated `.qtpl.go` files to maintain, templates compile into the binary
+   as string constants. Satisfies all ACs without the complexity. Per pattern P2, embedded
+   assets can be introduced later when a production consumer exists.
+
+2. **Tasks 2+3 merged, Tasks 4+5 merged**: Per pattern P1, tightly coupled tasks sharing
+   a test surface were merged. Generator code and template code are in the same file
+   (`cli_go.go`, `mcp_typescript.go`) — splitting them would have created artificial
+   boundaries with no testing benefit.
+
+3. **No `templates/` directory**: Because templates are inline string constants in the
+   generator files, the planned `templates/cli/golang/` and `templates/mcp/typescript/`
+   directories were not created.
+
+4. **`goIdentifier()` helper added**: Integration tests discovered that hyphenated tool
+   names (e.g., `check-health`) produce invalid Go identifiers. Added `goIdentifier()`
+   to convert hyphens to camelCase and `GoName` field to template data structs.
+
+5. **`integration_test.go` as separate file**: Task 6 golden-file tests were placed in
+   a dedicated `integration_test.go` rather than spreading across the existing test files.
+   The integration tests write to disk and invoke `go build`/`go vet`, warranting separation.
+
+### Actual File Paths
+
+| File | Action |
+|------|--------|
+| `internal/codegen/engine.go` | Created — Generator interface, Engine, TemplateData, GenerateOptions, GenerateResult |
+| `internal/codegen/engine_test.go` | Created — 37 tests |
+| `internal/codegen/cli_go.go` | Created — GoCLIGenerator, Go templates as string constants |
+| `internal/codegen/cli_go_test.go` | Created — 69+ tests |
+| `internal/codegen/mcp_typescript.go` | Created — TSMCPGenerator, TS templates as string constants |
+| `internal/codegen/mcp_typescript_test.go` | Created — 73 tests |
+| `internal/codegen/integration_test.go` | Created — compilation/integration tests |
+| `internal/codegen/testhelpers_test.go` | Created — shared test helpers (post-build review fix) |
+
+### Implementation Decisions
+
+- **Type mapping**: Go (`string→string`, `int→int`, `float→float64`, `bool→bool`),
+  TypeScript (`string→string`, `int→number`, `float→number`, `bool→boolean`).
+  Unknown types pass through as-is.
+- **Conditional file generation**: `login.go` only for oauth2; `resolver.go` for
+  token/oauth2; `middleware.ts` for token/oauth2; `metadata.ts` only for oauth2 +
+  streamable-http transport.
+- **Generated go.mod pins cobra v1.8.0**: May need version parameterization later.
+- **219 total tests** across all codegen test files.
