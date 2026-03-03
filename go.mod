@@ -17,6 +17,7 @@ require (
 	github.com/kaptinlin/go-i18n v0.2.3 // indirect
 	github.com/kaptinlin/jsonpointer v0.4.9 // indirect
 	github.com/kaptinlin/messageformat-go v0.4.9 // indirect
+	github.com/ohler55/ojg v1.28.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
