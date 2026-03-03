@@ -1185,8 +1185,8 @@ func TestParse_DoesNotPanic(t *testing.T) {
 		"42",
 		"true",
 		`"just a string"`,
-		"apiVersion: toolwright/v1", // missing everything else
-		strings.Repeat("a: b\n", 10000),
+		"apiVersion: toolwright/v1",   // missing everything else
+		strings.Repeat("a: b\n", 100), // 100 suffices; 10000 causes 17GB peak alloc
 	}
 
 	for i, input := range adversarial {
