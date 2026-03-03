@@ -3,6 +3,8 @@
 ## Code Standards
 
 1. All code passes `gofmt` and `golangci-lint` with no warnings.
+1a. Linter versions must match between local tooling and CI. Pin versions in CI config and document install commands.
+1b. `//nolint` directives require a trailing comment explaining why the suppression is correct (e.g., `//nolint:noctx // intentional: process group kill`).
 2. No global mutable state. No `init()` functions.
 3. Public functions accept interfaces, return concrete structs.
 4. All errors are wrapped with context using `fmt.Errorf("...: %w", err)`.
