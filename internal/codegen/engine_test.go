@@ -513,12 +513,12 @@ func TestEngine_Generate_MarkerFileContainsAllRequiredFields(t *testing.T) {
 	require.NoError(t, err)
 	contentStr := string(content)
 
-	assert.Contains(t, contentStr, "4.5.6", "Marker must contain version")
-	assert.Contains(t, contentStr, "cli", "Marker must contain mode")
-	assert.Contains(t, contentStr, "go", "Marker must contain target")
-	// Timestamp: just verify it contains a year-like pattern from the current time.
-	assert.Contains(t, contentStr, time.Now().UTC().Format("2006"),
-		"Marker must contain a timestamp with the current year")
+	assert.Contains(t, contentStr, "version: 4.5.6", "Marker must contain version field")
+	assert.Contains(t, contentStr, "mode: cli", "Marker must contain mode field")
+	assert.Contains(t, contentStr, "target: go", "Marker must contain target field")
+	// Timestamp: verify the marker contains a "timestamp:" key with the current year.
+	assert.Contains(t, contentStr, "timestamp: "+time.Now().UTC().Format("2006"),
+		"Marker must contain a timestamp field with the current year")
 }
 
 func TestEngine_Generate_MarkerFileIncludedInResult(t *testing.T) {
@@ -1010,13 +1010,10 @@ func TestEngine_Generate_ContextCancelled(t *testing.T) {
 		Version:   "1.0.0",
 	})
 
-	// A well-behaved engine should respect context cancellation.
-	// We accept either an error or context.Canceled behavior.
-	// The key test is that it does not panic.
-	if err != nil {
-		assert.ErrorIs(t, err, context.Canceled,
-			"Error from cancelled context should wrap context.Canceled")
-	}
+	// A well-behaved engine must respect context cancellation and return an error.
+	require.Error(t, err, "Generate must error when context is cancelled")
+	assert.ErrorIs(t, err, context.Canceled,
+		"Error from cancelled context should wrap context.Canceled")
 }
 
 func TestEngine_Generate_TimestampIsRFC3339OrISO8601(t *testing.T) {
@@ -1087,7 +1084,7 @@ func TestEngine_Register_SameModeTarget_LastWins(t *testing.T) {
 }
 
 func TestEngine_Generate_EmptyVersion(t *testing.T) {
-	// Version is empty string — engine should still work (or error clearly).
+	// Version is empty string — engine should still work (version is optional metadata).
 	gen := newMockGenerator("cli", "go", []GeneratedFile{
 		{Path: "main.go", Content: []byte("package main")},
 	})
@@ -1103,15 +1100,10 @@ func TestEngine_Generate_EmptyVersion(t *testing.T) {
 		Version:   "",
 	})
 
-	// Either succeeds with empty version or errors clearly.
-	if err != nil {
-		assert.Contains(t, strings.ToLower(err.Error()), "version",
-			"If empty version errors, the error should mention 'version'")
-	} else {
-		require.NotNil(t, result)
-		// If it succeeds, the version in TemplateData should be empty.
-		assert.Equal(t, "", gen.lastCall().Data.Version)
-	}
+	require.NoError(t, err, "Empty version should succeed — version is optional metadata")
+	require.NotNil(t, result)
+	assert.Equal(t, "", gen.lastCall().Data.Version,
+		"Empty version should be passed through as empty string")
 }
 
 // ---------------------------------------------------------------------------

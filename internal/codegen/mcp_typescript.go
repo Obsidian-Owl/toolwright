@@ -46,6 +46,9 @@ func (g *TSMCPGenerator) Generate(ctx context.Context, data TemplateData, _ stri
 
 	// per-tool handler files
 	for _, tool := range m.Tools {
+		if !validToolName.MatchString(tool.Name) {
+			return nil, fmt.Errorf("tool name %q contains invalid characters: must match %s", tool.Name, validToolName.String())
+		}
 		auth := m.ResolvedAuth(tool)
 		toolData := buildTSToolData(tool, auth)
 		var toolFile []byte

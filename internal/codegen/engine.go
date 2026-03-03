@@ -128,8 +128,14 @@ func (e *Engine) Generate(ctx context.Context, m manifest.Toolkit, opts Generate
 
 	if !opts.DryRun {
 		// Write generated files to disk.
+		cleanOutputDir := filepath.Clean(opts.OutputDir)
 		for _, f := range files {
 			destPath := filepath.Join(opts.OutputDir, f.Path)
+			// Guard against path traversal: resolved path must stay within output dir.
+			if !strings.HasPrefix(filepath.Clean(destPath), cleanOutputDir+string(filepath.Separator)) &&
+				filepath.Clean(destPath) != cleanOutputDir {
+				return nil, fmt.Errorf("generated file path %q escapes output directory", f.Path)
+			}
 			if mkErr := os.MkdirAll(filepath.Dir(destPath), 0755); mkErr != nil {
 				return nil, fmt.Errorf("creating directory for %s: %w", f.Path, mkErr)
 			}

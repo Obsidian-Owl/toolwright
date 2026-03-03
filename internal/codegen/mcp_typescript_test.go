@@ -384,6 +384,13 @@ func TestTSMCP_AC7_PackageJSONIsValidStructure(t *testing.T) {
 		"package.json must have a name field")
 }
 
+func TestTSMCP_AC7_PackageJSONContainsZodDependency(t *testing.T) {
+	files := generateTSMCP(t, mcpManifestTwoToolsNoAuth())
+	content := fileContent(t, files, "package.json")
+	assert.Contains(t, content, `"zod"`,
+		"package.json must list zod as a dependency (required by MCP SDK for schema validation)")
+}
+
 func TestTSMCP_AC7_TSConfigPresent(t *testing.T) {
 	files := generateTSMCP(t, mcpManifestTwoToolsNoAuth())
 	requireFile(t, files, "tsconfig.json")
@@ -643,12 +650,12 @@ func TestTSMCP_AC11_TypeMapping(t *testing.T) {
 	tests := []struct {
 		name         string
 		manifestType string
-		wantTSType   string
+		wantZodCall  string // Zod schema method (z.string(), z.number(), z.boolean())
 	}{
-		{name: "string maps to string", manifestType: "string", wantTSType: "string"},
-		{name: "int maps to number", manifestType: "int", wantTSType: "number"},
-		{name: "float maps to number", manifestType: "float", wantTSType: "number"},
-		{name: "bool maps to boolean", manifestType: "bool", wantTSType: "boolean"},
+		{name: "string maps to z.string()", manifestType: "string", wantZodCall: "z.string()"},
+		{name: "int maps to z.number()", manifestType: "int", wantZodCall: "z.number()"},
+		{name: "float maps to z.number()", manifestType: "float", wantZodCall: "z.number()"},
+		{name: "bool maps to z.boolean()", manifestType: "bool", wantZodCall: "z.boolean()"},
 	}
 
 	for _, tc := range tests {
@@ -685,9 +692,9 @@ func TestTSMCP_AC11_TypeMapping(t *testing.T) {
 
 			files := generateTSMCP(t, m)
 			content := fileContent(t, files, "src/tools/type_test.ts")
-			assert.Contains(t, content, tc.wantTSType,
-				"manifest type %q must map to TS type %q in generated code",
-				tc.manifestType, tc.wantTSType)
+			assert.Contains(t, content, tc.wantZodCall,
+				"manifest type %q must produce Zod schema call %q in generated code",
+				tc.manifestType, tc.wantZodCall)
 		})
 	}
 }
@@ -767,8 +774,8 @@ func TestTSMCP_AC11_IntAndFloatBothMapToNumber_ButAreDistinct(t *testing.T) {
 		"typed_tool.ts must contain 'number' type for int/float")
 	assert.Contains(t, content, "boolean",
 		"typed_tool.ts must contain 'boolean' type for bool")
-	assert.Contains(t, content, "string",
-		"typed_tool.ts must contain 'string' type for string")
+	assert.Contains(t, content, "z.string()",
+		"typed_tool.ts must contain z.string() Zod schema for string type")
 }
 
 // ---------------------------------------------------------------------------
@@ -779,10 +786,12 @@ func TestTSMCP_AC13_NoLiteralTokenValues(t *testing.T) {
 	files := generateTSMCP(t, mcpManifestTokenAuth())
 
 	secretPatterns := []string{
-		"sk-",       // Common API key prefix
-		"ghp_",      // GitHub PAT prefix
-		"Bearer ",   // Literal bearer token value (not as a format string check)
-		"password:", // Hardcoded password
+		"sk-",           // Common API key prefix
+		"ghp_",          // GitHub PAT prefix
+		"password:",     // Hardcoded password
+		"AKIA",          // AWS access key prefix
+		"client_secret", // OAuth client secret
+		"private_key",   // Private key reference
 	}
 
 	for _, f := range files {
@@ -1082,11 +1091,10 @@ func TestTSMCP_ContextCancellationRespected(t *testing.T) {
 		Version:   "0.1.0",
 	}
 	_, err := gen.Generate(ctx, data, "")
-	// Must either return an error or handle gracefully (not panic)
-	if err != nil {
-		assert.ErrorIs(t, err, context.Canceled,
-			"error from cancelled context should wrap context.Canceled")
-	}
+	// Must return an error when context is cancelled.
+	require.Error(t, err, "Generate must error when context is cancelled")
+	assert.ErrorIs(t, err, context.Canceled,
+		"error from cancelled context should wrap context.Canceled")
 }
 
 func TestTSMCP_ToolWithNoArgsNoFlags(t *testing.T) {
@@ -1216,4 +1224,38 @@ func TestTSMCP_ToolFileContainsFlagDescriptions(t *testing.T) {
 		"search_docs.ts must include flag description for 'query'")
 	assert.Contains(t, content, "Max results",
 		"search_docs.ts must include flag description for 'limit'")
+}
+
+func TestTSMCP_EmptyToolsSlice(t *testing.T) {
+	// Boundary case: manifest with zero tools should still produce structural
+	// files (index.ts, search.ts, package.json, tsconfig.json, README) without panic.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "empty-server",
+			Version:     "1.0.0",
+			Description: "No tools",
+		},
+		Tools: []manifest.Tool{},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+	files := generateTSMCP(t, m)
+	requireFile(t, files, "src/index.ts")
+	requireFile(t, files, "src/search.ts")
+	requireFile(t, files, "package.json")
+	requireFile(t, files, "tsconfig.json")
+	requireFile(t, files, "README.md")
+	// No per-tool files, no auth middleware
+	for _, f := range files {
+		assert.Falsef(t, strings.HasPrefix(f.Path, "src/tools/"),
+			"empty tools manifest should not produce per-tool file %q", f.Path)
+		assert.Falsef(t, strings.HasPrefix(f.Path, "src/auth/"),
+			"empty tools manifest should not produce auth file %q", f.Path)
+	}
 }

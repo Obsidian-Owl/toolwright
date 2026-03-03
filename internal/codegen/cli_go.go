@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"text/template"
 
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 )
+
+// validToolName matches tool names safe for use in identifiers and file paths.
+var validToolName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
 
 // GoCLIGenerator generates Go CLI projects using Cobra.
 type GoCLIGenerator struct{}
@@ -61,6 +65,9 @@ func (g *GoCLIGenerator) Generate(ctx context.Context, data TemplateData, _ stri
 
 	// per-tool command files
 	for _, tool := range m.Tools {
+		if !validToolName.MatchString(tool.Name) {
+			return nil, fmt.Errorf("tool name %q contains invalid characters: must match %s", tool.Name, validToolName.String())
+		}
 		auth := m.ResolvedAuth(tool)
 		var toolFile []byte
 		toolFile, err = renderTemplate("tool.go", toolGoTmpl, buildToolData(m, tool, auth))
@@ -531,7 +538,7 @@ var {{.GoName}}Cmd = &cobra.Command{
 		_ = token // passed to the entrypoint via environment
 {{- end}}
 		// Execute the tool entrypoint.
-		c := exec.CommandContext(cmd.Context(), "sh", "-c", "echo 'running {{$toolName}}'")
+		c := exec.CommandContext(cmd.Context(), "echo", "running", "{{$toolName}}")
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {

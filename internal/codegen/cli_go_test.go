@@ -492,18 +492,15 @@ func TestGoCLI_AC5_ToolCommandMapsFlags(t *testing.T) {
 func TestGoCLI_AC5_ToolCommandFlagTypes(t *testing.T) {
 	files := generateCLI(t, manifestWithArgsAndFlags())
 	content := fileContent(t, files, "internal/commands/upload.go")
-	// Bool flags should use BoolVar/BoolP or similar
-	contentLower := strings.ToLower(content)
-	assert.True(t,
-		strings.Contains(contentLower, "bool"),
-		"tool command must reference bool type for verbose flag")
-	assert.True(t,
-		strings.Contains(contentLower, "int"),
-		"tool command must reference int type for retries flag")
-	// float64 for float type
-	assert.True(t,
-		strings.Contains(content, "float64") || strings.Contains(content, "Float64"),
-		"tool command must reference float64 type for timeout flag")
+	// Each flag type must use the correct Cobra registration function.
+	assert.Contains(t, content, "BoolVar",
+		"verbose (bool) flag must use BoolVar registration")
+	assert.Contains(t, content, "IntVar",
+		"retries (int) flag must use IntVar registration")
+	assert.Contains(t, content, "Float64Var",
+		"timeout (float) flag must use Float64Var registration")
+	assert.Contains(t, content, "StringVar",
+		"format (string) flag must use StringVar registration")
 }
 
 func TestGoCLI_AC5_ToolCommandRequiredFlagEnforced(t *testing.T) {
@@ -533,9 +530,13 @@ func TestGoCLI_AC5_ToolCommandEnumValues(t *testing.T) {
 func TestGoCLI_AC5_ToolCommandDefaultValues(t *testing.T) {
 	files := generateCLI(t, manifestWithArgsAndFlags())
 	content := fileContent(t, files, "internal/commands/upload.go")
-	// Default for retries is 3
-	assert.Contains(t, content, "3",
-		"tool command must include default value 3 for retries flag")
+	// Default for retries is 3 — assert the IntVar registration includes the default.
+	// Pattern: IntVar(&..., "retries", 3, ...)
+	assert.Contains(t, content, `"retries", 3`,
+		"tool command must include default value 3 for retries flag in IntVar registration")
+	// Default for timeout is 30 (float)
+	assert.Contains(t, content, `"timeout", 30`,
+		"tool command must include default value 30 for timeout flag in Float64Var registration")
 }
 
 func TestGoCLI_AC5_ToolCommandFlagDescriptions(t *testing.T) {
@@ -582,14 +583,14 @@ func TestGoCLI_AC5_EachToolGetsOwnFile(t *testing.T) {
 
 func TestGoCLI_AC11_TypeMapping(t *testing.T) {
 	tests := []struct {
-		name         string
-		manifestType string
-		wantGoType   string
+		name          string
+		manifestType  string
+		wantCobraFunc string // Cobra flag registration function (StringVar, IntVar, etc.)
 	}{
-		{name: "string maps to string", manifestType: "string", wantGoType: "string"},
-		{name: "int maps to int", manifestType: "int", wantGoType: "int"},
-		{name: "float maps to float64", manifestType: "float", wantGoType: "float64"},
-		{name: "bool maps to bool", manifestType: "bool", wantGoType: "bool"},
+		{name: "string maps to StringVar", manifestType: "string", wantCobraFunc: "StringVar"},
+		{name: "int maps to IntVar", manifestType: "int", wantCobraFunc: "IntVar"},
+		{name: "float maps to Float64Var", manifestType: "float", wantCobraFunc: "Float64Var"},
+		{name: "bool maps to BoolVar", manifestType: "bool", wantCobraFunc: "BoolVar"},
 	}
 
 	for _, tc := range tests {
@@ -620,9 +621,9 @@ func TestGoCLI_AC11_TypeMapping(t *testing.T) {
 
 			files := generateCLI(t, m)
 			content := fileContent(t, files, "internal/commands/test-tool.go")
-			assert.Contains(t, content, tc.wantGoType,
-				"manifest type %q must map to Go type %q in generated code",
-				tc.manifestType, tc.wantGoType)
+			assert.Contains(t, content, tc.wantCobraFunc,
+				"manifest type %q must use Cobra function %q in generated code",
+				tc.manifestType, tc.wantCobraFunc)
 		})
 	}
 }
@@ -705,10 +706,14 @@ func TestGoCLI_AC13_NoLiteralTokenValues(t *testing.T) {
 
 	// Scan ALL generated files for secret-like patterns
 	secretPatterns := []string{
-		"sk-",       // Common API key prefix
-		"ghp_",      // GitHub personal access token prefix
-		"Bearer ",   // Literal bearer token (not as a format string)
-		"password:", // Hardcoded password
+		"sk-",           // Common API key prefix
+		"ghp_",          // GitHub personal access token prefix
+		"Bearer ",       // Literal bearer token with space
+		"\"Bearer\"",    // Literal bearer string in quotes
+		"password:",     // Hardcoded password
+		"AKIA",          // AWS access key prefix
+		"client_secret", // OAuth client secret
+		"private_key",   // Private key reference
 	}
 
 	for _, f := range files {
@@ -1088,11 +1093,10 @@ func TestGoCLI_ContextCancellationRespected(t *testing.T) {
 		Version:   "0.1.0",
 	}
 	_, err := gen.Generate(ctx, data, "")
-	// Must either return an error or handle gracefully (not panic)
-	if err != nil {
-		assert.ErrorIs(t, err, context.Canceled,
-			"error from cancelled context should wrap context.Canceled")
-	}
+	// Must return an error when context is cancelled.
+	require.Error(t, err, "Generate must error when context is cancelled")
+	assert.ErrorIs(t, err, context.Canceled,
+		"error from cancelled context should wrap context.Canceled")
 }
 
 func TestGoCLI_NoDuplicateFilePaths(t *testing.T) {
@@ -1119,4 +1123,28 @@ func TestGoCLI_FilePathsAreRelative(t *testing.T) {
 		assert.Falsef(t, strings.HasPrefix(f.Path, "/"),
 			"generated file path %q must be relative, not absolute", f.Path)
 	}
+}
+
+func TestGoCLI_EmptyToolsSlice(t *testing.T) {
+	// Boundary case: manifest with zero tools should still produce structural
+	// files (main.go, root.go, go.mod, Makefile, README) without panic.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "empty-toolkit",
+			Version:     "1.0.0",
+			Description: "No tools",
+		},
+		Tools: []manifest.Tool{},
+	}
+	files := generateCLI(t, m)
+	requireFile(t, files, "cmd/empty-toolkit/main.go")
+	requireFile(t, files, "internal/commands/root.go")
+	requireFile(t, files, "go.mod")
+	requireFile(t, files, "Makefile")
+	requireFile(t, files, "README.md")
+	// No per-tool command files, no auth resolver, no login.go
+	assertNoFile(t, files, "internal/auth/resolver.go")
+	assertNoFile(t, files, "internal/commands/login.go")
 }
