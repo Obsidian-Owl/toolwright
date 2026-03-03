@@ -1,0 +1,41 @@
+{
+  "workId": "runner",
+  "timestamp": "2026-03-03T15:00:00Z",
+  "findings": [
+    {
+      "category": "build",
+      "source": "CI failure: golangci-lint v2.0.2 local vs v2.10.1 CI — noctx for exec.Command",
+      "description": "Local linter missed noctx issue because it was an older version. CI caught it after push. Version skew creates false confidence in local hooks.",
+      "proposedRule": "Linter versions must match between local tooling and CI. Pin versions in CI config and document install commands.",
+      "disposition": "promoted:constitution:1a"
+    },
+    {
+      "category": "testing",
+      "source": "manifest TestParse_DoesNotPanic: strings.Repeat(\"a: b\\n\", 10000) → 17.4GB peak alloc",
+      "description": "A 50KB YAML input caused 17.4GB peak memory allocation through the YAML parser's node tree construction (348x amplification). Reduced to 100 reps: same code path coverage, 0.01s execution.",
+      "proposedRule": "Size adversarial test inputs for the code path, not the parser. Profile memory before committing large-input tests.",
+      "disposition": "promoted:patterns:P6"
+    },
+    {
+      "category": "build",
+      "source": "4 CI failures (OOM, lint args, noctx, govulncheck) all caught too late",
+      "description": "Pre-push hooks mirroring CI would have caught all 4 failures locally. Added pre-push hook running build + test + lint + govulncheck.",
+      "proposedRule": "Pre-push hooks must run the same checks as CI. Update hooks when CI steps change.",
+      "disposition": "promoted:patterns:P7"
+    },
+    {
+      "category": "architecture",
+      "source": "exec.Command vs exec.CommandContext — process group kill semantics",
+      "description": "exec.CommandContext only kills parent PID, not the process group. Used exec.Command with manual goroutine + Kill(-pgid, SIGKILL). Required //nolint:noctx with rationale comment.",
+      "proposedRule": "nolint directives require a trailing comment explaining the suppression rationale.",
+      "disposition": "promoted:constitution:1b"
+    },
+    {
+      "category": "security",
+      "source": "3 security WARNs (unsanitized entrypoint, unvalidated WorkDir, unbounded buffers)",
+      "description": "Same class of defense-in-depth issues as auth unit. Constitution rule 26 applied directly without modification.",
+      "proposedRule": null,
+      "disposition": "dismissed:already-covered-by-rule-26"
+    }
+  ]
+}

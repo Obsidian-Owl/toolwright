@@ -3,15 +3,21 @@
   "currentWork": {
     "id": "toolwright-core",
     "description": "Design and implement Toolwright CLI framework from spec",
-    "status": "building",
+    "status": "verifying",
     "workDir": ".specwright/work/toolwright-core/units/testing",
     "unitId": "testing",
-    "tasksTotal": null,
-    "tasksCompleted": [],
+    "tasksTotal": 5,
+    "tasksCompleted": ["task-1", "task-2", "task-3", "task-4", "task-5"],
     "currentTask": null,
     "intensity": "full"
   },
-  "gates": {},
+  "gates": {
+    "build": { "status": "PASS", "timestamp": "2026-03-03T16:35:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } },
+    "tests": { "status": "PASS", "timestamp": "2026-03-03T16:36:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } },
+    "security": { "status": "PASS", "timestamp": "2026-03-03T16:40:00Z", "findings": { "block": 0, "warn": 3, "info": 5 } },
+    "wiring": { "status": "PASS", "timestamp": "2026-03-03T16:45:00Z", "findings": { "block": 0, "warn": 0, "info": 11 } },
+    "spec": { "status": "PASS", "timestamp": "2026-03-03T16:50:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } }
+  },
   "workUnits": [
     { "id": "manifest", "description": "Go module, project structure, manifest types/parser/validation, JSON Schema validator", "status": "shipped", "order": 1, "workDir": ".specwright/work/toolwright-core/units/manifest", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/1" },
     { "id": "auth", "description": "Token resolver chain, keyring storage, fallback file store, OAuth 2.1 PKCE flow", "status": "shipped", "order": 2, "workDir": ".specwright/work/toolwright-core/units/auth", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/2" },

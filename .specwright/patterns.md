@@ -26,3 +26,13 @@ Reusable patterns discovered during development. Referenced from auto-memory.
 **Source:** auth unit (8 WARNs resolved post-verify in one commit)
 **When:** Verification produces WARN-level gate findings.
 **Pattern:** Fix all WARNs immediately after verify, before shipping. Post-verify is the cheapest time — context is fresh, tests pass, and each fix is typically 1-5 lines. Deferred WARNs accumulate into tech debt.
+
+## P6: Size adversarial test inputs for the code path, not the parser
+**Source:** runner unit (manifest TestParse_DoesNotPanic OOM)
+**When:** Writing fuzz-style or adversarial tests with repeated/large inputs fed to a parser (YAML, JSON, etc.).
+**Pattern:** Parsers can amplify input size non-linearly in memory (50KB YAML → 17.4GB peak alloc). Size inputs to exercise the target code path (e.g., "doesn't panic"), not to stress the parser. Profile memory with `go test -memprofile` before committing large-input tests. 100 repetitions usually suffices where 10000 was used.
+
+## P7: Pre-push hooks must mirror CI
+**Source:** runner unit (4 CI failures caught too late)
+**When:** CI pipeline has build, test, lint, or security checks.
+**Pattern:** Pre-push hooks should run the same checks as CI. When a CI step is added or changed, update `.githooks/pre-push` to match. This eliminates the push-wait-fail-fix-push loop. Pre-commit stays fast (format + vet + lint on changed files); pre-push does the full suite.
