@@ -36,3 +36,13 @@ Reusable patterns discovered during development. Referenced from auto-memory.
 **Source:** runner unit (4 CI failures caught too late)
 **When:** CI pipeline has build, test, lint, or security checks.
 **Pattern:** Pre-push hooks should run the same checks as CI. When a CI step is added or changed, update `.githooks/pre-push` to match. This eliminates the push-wait-fail-fix-push loop. Pre-commit stays fast (format + vet + lint on changed files); pre-push does the full suite.
+
+## P8: Check stdlib package name collisions during planning
+**Source:** testing unit (renamed `internal/testing/` → `internal/tooltest/`)
+**When:** Naming an internal package during design or planning.
+**Pattern:** Before committing to a package name, check if it collides with a Go stdlib package (e.g., `testing`, `net`, `sync`). Collisions force awkward import aliases or rename refactors mid-build. Use `go doc <name>` to verify the name is free. Prefer descriptive prefixes (e.g., `tooltest` instead of `testing`).
+
+## P9: Interface wrapping enables mock injection
+**Source:** testing unit (ToolExecutor interface for runner)
+**When:** A package depends on an external subsystem (process execution, HTTP, file I/O) that would make tests slow, flaky, or environment-dependent.
+**Pattern:** Define a one-method interface at the consumer site (e.g., `ToolExecutor` in tooltest, not in runner). The real implementation satisfies it naturally; tests inject a mock struct. Pre-allocate result slices indexed by position for parallel test execution with deterministic ordering.

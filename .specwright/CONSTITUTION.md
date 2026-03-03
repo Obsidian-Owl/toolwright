@@ -41,6 +41,7 @@
 ## Security
 
 23. Tokens are never logged, printed, or included in error output.
+23a. Exclude secrets from output data models structurally — if a type flows to formatters or serializers, it must not have a token field. Absence of the field is stronger than runtime scrubbing.
 24. Auth tokens are passed to entrypoints via CLI flags, not environment variables.
 25. No secrets in generated code or templates.
 26. Auth-adjacent code applies defense-in-depth: bind listeners to 127.0.0.1, limit I/O reads (`io.LimitReader`), enforce HTTPS on provider URLs, use Fstat on open fds (not stat-then-read), sanitize paths with `filepath.Clean`.
