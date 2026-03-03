@@ -26,6 +26,6 @@
     { "id": "codegen", "description": "Generator interface, Go CLI templates, TypeScript MCP templates", "status": "planned", "order": 5, "workDir": ".specwright/work/toolwright-core/units/codegen" },
     { "id": "cli", "description": "Cobra commands, TUI wizard, init scaffolding, AI generation, main.go", "status": "planned", "order": 6, "workDir": ".specwright/work/toolwright-core/units/cli" }
   ],
-  "lock": { "holder": "sw-verify", "acquired": "2026-03-03T16:30:00Z" },
+  "lock": null,
   "lastUpdated": "2026-03-03T14:30:00Z"
 }
