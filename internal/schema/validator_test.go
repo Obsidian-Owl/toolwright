@@ -148,11 +148,11 @@ func TestValidate_MissingRequiredField_Error(t *testing.T) {
 	v := NewValidator(testFS())
 
 	tests := []struct {
-		name          string
-		schemaPath    string
-		data          string
-		missingField  string // must appear in error message
-		wantPathHint  string // partial path that error should reference
+		name         string
+		schemaPath   string
+		data         string
+		missingField string // must appear in error message
+		wantPathHint string // partial path that error should reference
 	}{
 		{
 			name:         "missing name field",
@@ -693,12 +693,12 @@ func TestValidate_NotHardcoded(t *testing.T) {
 	}
 
 	invalids := []string{
-		`{"name": "alpha"}`,                       // missing count
-		`{"count": 1}`,                            // missing name
-		`{}`,                                      // missing both
-		`{"name": 1, "count": 1}`,                 // wrong type name
-		`{"name": "a", "count": "b"}`,             // wrong type count
-		`{"name": true, "count": false}`,          // both wrong type
+		`{"name": "alpha"}`,              // missing count
+		`{"count": 1}`,                   // missing name
+		`{}`,                             // missing both
+		`{"name": 1, "count": 1}`,        // wrong type name
+		`{"name": "a", "count": "b"}`,    // wrong type count
+		`{"name": true, "count": false}`, // both wrong type
 	}
 
 	for _, data := range valids {

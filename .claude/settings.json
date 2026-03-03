@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "gofmt -l \"$CLAUDE_FILE_PATH\" 2>/dev/null | grep -q . && gofmt -w \"$CLAUDE_FILE_PATH\" && echo 'gofmt: reformatted' || true"
+          }
+        ]
+      }
+    ]
+  }
+}

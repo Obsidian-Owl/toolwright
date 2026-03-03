@@ -18,6 +18,7 @@
 11. Use `testify` for assertions and `go-cmp` for struct comparison.
 12. No test helpers that swallow errors silently — `t.Fatal` on unexpected failures.
 13. Integration tests that touch the filesystem use `t.TempDir()`.
+14a. When 2+ test files need the same helper, put it in `testhelpers_test.go` in that package immediately. Don't let duplicate helpers accumulate across files.
 
 ## Architecture
 
@@ -40,6 +41,7 @@
 23. Tokens are never logged, printed, or included in error output.
 24. Auth tokens are passed to entrypoints via CLI flags, not environment variables.
 25. No secrets in generated code or templates.
+26. Auth-adjacent code applies defense-in-depth: bind listeners to 127.0.0.1, limit I/O reads (`io.LimitReader`), enforce HTTPS on provider URLs, use Fstat on open fds (not stat-then-read), sanitize paths with `filepath.Clean`.
 
 ## Git
 

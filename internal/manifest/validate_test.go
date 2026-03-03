@@ -66,17 +66,6 @@ func findErrorByPath(errs []ValidationError, path string) *ValidationError {
 	return nil
 }
 
-// countErrorsByRule counts how many ValidationErrors have the given rule.
-func countErrorsByRule(errs []ValidationError, rule string) int {
-	n := 0
-	for i := range errs {
-		if errs[i].Rule == rule {
-			n++
-		}
-	}
-	return n
-}
-
 // ---------------------------------------------------------------------------
 // Baseline: Valid manifest produces zero errors
 // ---------------------------------------------------------------------------
@@ -165,7 +154,7 @@ func TestValidate_NameFormat(t *testing.T) {
 		{name: "at sign", inputName: "my@tool", wantError: true},
 		{name: "exclamation", inputName: "tool!", wantError: true},
 		{name: "slash", inputName: "my/tool", wantError: true},
-		{name: "leading hyphen", inputName: "-tool", wantError: false}, // regex allows it
+		{name: "leading hyphen", inputName: "-tool", wantError: false},  // regex allows it
 		{name: "trailing hyphen", inputName: "tool-", wantError: false}, // regex allows it
 		{name: "unicode", inputName: "werkzeug-\u00fc", wantError: true},
 		{name: "emoji", inputName: "tool-\U0001F680", wantError: true},
@@ -946,9 +935,9 @@ func TestValidate_PathUsesBracketNotation(t *testing.T) {
 func TestValidate_RuleIsMachineReadable(t *testing.T) {
 	// Rules should be kebab-case identifiers, not sentences or codes with spaces.
 	tk := validToolkit()
-	tk.Metadata.Name = ""                                  // triggers required + name-format
-	tk.Metadata.Version = "bad"                            // triggers semver
-	tk.Metadata.Description = strings.Repeat("x", 201)    // triggers description length
+	tk.Metadata.Name = ""                              // triggers required + name-format
+	tk.Metadata.Version = "bad"                        // triggers semver
+	tk.Metadata.Description = strings.Repeat("x", 201) // triggers description length
 	tk.Tools = []Tool{
 		{Name: "a", Description: "A", Entrypoint: "./a.sh"},
 		{Name: "a", Description: "B", Entrypoint: "./b.sh"}, // triggers unique-tool-name
@@ -990,9 +979,9 @@ func TestValidate_MultipleErrors_NotFailFast(t *testing.T) {
 		APIVersion: "toolwright/v1",
 		Kind:       "Toolkit",
 		Metadata: Metadata{
-			Name:        "INVALID",                      // bad name
-			Version:     "not-a-version",                // bad version
-			Description: strings.Repeat("z", 300),       // too long
+			Name:        "INVALID",                // bad name
+			Version:     "not-a-version",          // bad version
+			Description: strings.Repeat("z", 300), // too long
 		},
 		Tools: []Tool{
 			{Name: "dup", Description: "A", Entrypoint: "./a.sh"},
@@ -1240,7 +1229,7 @@ func TestValidate_DifferentInvalidVersions_AllFail(t *testing.T) {
 
 func TestValidate_ReturnType(t *testing.T) {
 	tk := validToolkit()
-	var errs []ValidationError = Validate(tk)
+	errs := Validate(tk)
 	// This is also a compile-time check that the return type is []ValidationError.
 	_ = errs
 }

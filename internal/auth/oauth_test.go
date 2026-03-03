@@ -1091,8 +1091,8 @@ func (f *fakeWritableTokenStore) Get(key string) (*StoredToken, error) {
 	if !ok {
 		return nil, fmt.Errorf("token not found for key %q", key)
 	}
-	copy := tok
-	return &copy, nil
+	tokCopy := tok
+	return &tokCopy, nil
 }
 
 func (f *fakeWritableTokenStore) Set(key string, token StoredToken) error {
@@ -1245,7 +1245,7 @@ func defaultLoginConfig(providerURL string, store WritableTokenStore, authURLCh 
 // runLoginAndSimulateCallback starts Login in a goroutine, waits for the
 // auth URL, simulates the callback with the given code, and returns the
 // Login result. This is the common pattern for happy-path tests.
-func runLoginAndSimulateCallback(t *testing.T, ctx context.Context, cfg LoginConfig, authURLCh <-chan string, code string) (*StoredToken, error) {
+func runLoginAndSimulateCallback(ctx context.Context, t *testing.T, cfg LoginConfig, authURLCh <-chan string, code string) (*StoredToken, error) {
 	t.Helper()
 
 	var result *StoredToken
@@ -1298,7 +1298,7 @@ func TestLogin_FullPKCEFlow_ReturnsToken(t *testing.T) {
 	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
 	ctx := context.Background()
 
-	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-auth-code")
+	result, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "test-auth-code")
 
 	require.NoError(t, err, "Login must succeed for a valid PKCE flow")
 	require.NotNil(t, result, "Login must return a non-nil StoredToken")
@@ -1457,7 +1457,7 @@ func TestLogin_CodeExchangeIncludesVerifier(t *testing.T) {
 	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
 	ctx := context.Background()
 
-	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	_, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "test-code")
 	require.NoError(t, err, "Login must succeed when token endpoint accepts the verifier")
 
 	// RFC 7636 Section 4.1: verifier is 43-128 characters.
@@ -1522,7 +1522,7 @@ func TestLogin_TokenStoredInStore(t *testing.T) {
 	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
 	ctx := context.Background()
 
-	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	result, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "test-code")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1552,7 +1552,7 @@ func TestLogin_TokenFieldsPopulated(t *testing.T) {
 	ctx := context.Background()
 
 	beforeLogin := time.Now()
-	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	result, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "test-code")
 	afterLogin := time.Now()
 
 	require.NoError(t, err)
@@ -2141,7 +2141,7 @@ func TestLogin_GrantTypeIsAuthorizationCode(t *testing.T) {
 	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
 	ctx := context.Background()
 
-	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "test-code")
+	_, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "test-code")
 	require.NoError(t, err)
 
 	assert.Equal(t, "authorization_code", capturedGrantType,
@@ -2163,7 +2163,7 @@ func TestLogin_TokenExchangeIncludesCode(t *testing.T) {
 	cfg := defaultLoginConfig(srv.URL, store, authURLCh)
 	ctx := context.Background()
 
-	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "my-unique-auth-code-12345")
+	_, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "my-unique-auth-code-12345")
 	require.NoError(t, err)
 
 	assert.Equal(t, "my-unique-auth-code-12345", capturedCode,
@@ -2238,7 +2238,7 @@ func TestLogin_TokenWithNoRefreshToken(t *testing.T) {
 	cfg := defaultLoginConfig(oauthSrv.URL, store, authURLCh)
 	ctx := context.Background()
 
-	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+	result, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "code")
 	require.NoError(t, err, "Login must succeed even without a refresh_token")
 	require.NotNil(t, result)
 
@@ -2298,7 +2298,7 @@ func TestLogin_ManualEndpoints_UsedWhenDiscoveryFails(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+	result, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "code")
 	require.NoError(t, err, "Login must succeed with manual endpoints")
 	require.NotNil(t, result)
 	assert.Equal(t, "manual-endpoint-token", result.AccessToken)
@@ -2326,7 +2326,7 @@ func TestLogin_HTTPClientUsedForTokenExchange(t *testing.T) {
 	cfg.HTTPClient = &http.Client{Transport: customTransport}
 	ctx := context.Background()
 
-	_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+	_, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "code")
 	require.NoError(t, err)
 
 	// The custom HTTP client should have been used for something
@@ -2392,7 +2392,7 @@ func TestLogin_MultipleDistinctTokens_AntiHardcoding(t *testing.T) {
 			cfg := defaultLoginConfig(oauthSrv.URL, store, authURLCh)
 			ctx := context.Background()
 
-			result, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+			result, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "code")
 			require.NoError(t, err)
 			require.NotNil(t, result)
 
@@ -2423,7 +2423,7 @@ func TestLogin_VerifierIsUniquePerCall(t *testing.T) {
 		cfg := defaultLoginConfig(srv.URL, store, authURLCh)
 		ctx := context.Background()
 
-		_, err := runLoginAndSimulateCallback(t, ctx, cfg, authURLCh, "code")
+		_, err := runLoginAndSimulateCallback(ctx, t, cfg, authURLCh, "code")
 		require.NoError(t, err, "Login %d must succeed", i)
 	}
 
@@ -2435,7 +2435,7 @@ func TestLogin_VerifierIsUniquePerCall(t *testing.T) {
 
 func TestLogin_StateMismatch_FullErrorMessage(t *testing.T) {
 	// AC-15: The exact error message for state mismatch must contain the
-	// specified string: "Security check failed (state mismatch)".
+	// specified string: "security check failed (state mismatch)".
 	srv := newMockOAuthServer(t, nil)
 	defer srv.Close()
 
@@ -2461,12 +2461,12 @@ func TestLogin_StateMismatch_FullErrorMessage(t *testing.T) {
 	<-done
 
 	require.Error(t, loginErr)
-	assert.Contains(t, loginErr.Error(), "Security check failed (state mismatch)",
+	assert.Contains(t, loginErr.Error(), "security check failed (state mismatch)",
 		"Error must contain the exact phrase per spec; got: %q", loginErr.Error())
 }
 
 func TestLogin_Timeout_FullErrorMessage(t *testing.T) {
-	// AC-15: The timeout error must contain: "Login cancelled or timed out".
+	// AC-15: The timeout error must contain: "login cancelled or timed out".
 	srv := newMockOAuthServer(t, nil)
 	defer srv.Close()
 
@@ -2487,7 +2487,7 @@ func TestLogin_Timeout_FullErrorMessage(t *testing.T) {
 	<-done
 
 	require.Error(t, loginErr)
-	assert.Contains(t, loginErr.Error(), "Login cancelled or timed out",
+	assert.Contains(t, loginErr.Error(), "login cancelled or timed out",
 		"Error must contain the exact phrase per spec; got: %q", loginErr.Error())
 }
 

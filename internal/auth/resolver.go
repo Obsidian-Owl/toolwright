@@ -57,6 +57,6 @@ func (r *Resolver) Resolve(_ context.Context, auth manifest.Auth, toolName strin
 	}
 
 	// Step 5: all sources exhausted — return actionable error.
-	return "", fmt.Errorf("tool %q requires authentication. Set %s or run %q.",
+	return "", fmt.Errorf("tool %q requires authentication, set %s or run %q",
 		toolName, auth.TokenEnv, "toolwright login "+toolName)
 }

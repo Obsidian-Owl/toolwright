@@ -611,4 +611,3 @@ func TestTokenFile_JSON_SpecialMapKeys(t *testing.T) {
 	_, ok := restored.Tokens["https://auth.example.com/oauth2?audience=api"]
 	assert.True(t, ok, "URL key with query params must survive JSON round-trip")
 }
-

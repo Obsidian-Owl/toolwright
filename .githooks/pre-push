@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Pre-push hook: mirrors CI pipeline locally.
+# Catches build, test, lint, and vulnerability issues before they reach CI.
+# Install: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+echo "==> pre-push: build"
+go build ./...
+
+echo "==> pre-push: test"
+go test ./... -count=1 -timeout 5m
+
+echo "==> pre-push: lint"
+if command -v golangci-lint &>/dev/null; then
+  golangci-lint run ./...
+else
+  echo "    golangci-lint not found, skipping (install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)"
+fi
+
+echo "==> pre-push: govulncheck"
+if command -v govulncheck &>/dev/null; then
+  govulncheck ./...
+else
+  echo "    govulncheck not found, skipping (install: go install golang.org/x/vuln/cmd/govulncheck@latest)"
+fi
+
+echo "==> pre-push: all checks passed"

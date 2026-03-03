@@ -87,20 +87,6 @@ func writeTokenFile(path string, tf TokenFile) error {
 	return nil
 }
 
-// checkPermissions stats path and returns an error if the file permissions
-// allow group or other access (i.e. mode & 0077 != 0).
-func checkPermissions(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("stating token file: %w", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		return fmt.Errorf("unsafe token file permission %04o: token file must have permission 0600 only; fix with: chmod 0600 %s",
-			info.Mode().Perm(), path)
-	}
-	return nil
-}
-
 // Get retrieves a stored token from the file store.
 // It opens the file once and checks permissions via Fstat on the open fd
 // to avoid a TOCTOU race between permission check and read.
@@ -143,8 +129,8 @@ func (fs *FileStore) Get(key string) (*StoredToken, error) {
 		return nil, fmt.Errorf("token not found for key %q", key)
 	}
 
-	copy := tok
-	return &copy, nil
+	tokCopy := tok
+	return &tokCopy, nil
 }
 
 // Set stores a token in the file store.

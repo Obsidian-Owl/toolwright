@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Pre-commit hook: format + vet on staged Go files.
+# Install: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+# Find staged .go files (added, copied, modified, renamed).
+STAGED_GO=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go' || true)
+if [ -z "$STAGED_GO" ]; then
+  exit 0
+fi
+
+# Check formatting.
+UNFORMATTED=$(echo "$STAGED_GO" | xargs gofmt -l 2>/dev/null || true)
+if [ -n "$UNFORMATTED" ]; then
+  echo "gofmt: the following files need formatting:"
+  echo "$UNFORMATTED"
+  echo ""
+  echo "Run: gofmt -w \$(git diff --cached --name-only -- '*.go')"
+  exit 1
+fi
+
+# Run go vet.
+go vet ./...
+
+# Run golangci-lint on changes since the last commit.
+if command -v golangci-lint &>/dev/null; then
+  golangci-lint run --new-from-rev=HEAD ./...
+fi

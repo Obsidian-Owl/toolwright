@@ -1065,4 +1065,3 @@ func TestFileStore_Delete_RemovesFromJSONFile(t *testing.T) {
 	_, hasAlive := tf.Tokens["alive"]
 	assert.True(t, hasAlive, "Surviving key 'alive' must still exist in file")
 }
-
