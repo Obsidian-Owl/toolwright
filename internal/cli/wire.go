@@ -59,13 +59,13 @@ func BuildRootCommand() *cobra.Command {
 	engine.Register(codegen.NewTSMCPGenerator())
 	genCfg := &generateConfig{Engine: engine}
 	genCmd := newGenerateCmd(genCfg)
-	genCmd.AddCommand(newGenerateManifestCmd(&manifestGenerateConfig{Generator: nil})) // TODO: wire real AI manifest generator
+	genCmd.AddCommand(newGenerateManifestCmd(&manifestGenerateConfig{Generator: nil}))
 	root.AddCommand(genCmd)
 
 	// init: wires scaffolder and wizard (nil until implementations exist).
 	initCfg := &initConfig{
-		Scaffolder: nil, // TODO: wire real scaffolder implementation
-		Wizard:     nil, // TODO: wire real TUI wizard implementation
+		Scaffolder: nil,
+		Wizard:     nil,
 	}
 	root.AddCommand(newInitCmd(initCfg))
 
