@@ -163,8 +163,8 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts ScaffoldOptions) (*Scaff
 	projectDir := filepath.Join(outputDir, opts.Name)
 
 	// Reject names that escape the output directory (path traversal defense).
-	rel, err := filepath.Rel(outputDir, projectDir)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	rel, relErr := filepath.Rel(outputDir, projectDir)
+	if relErr != nil || strings.HasPrefix(rel, "..") {
 		return nil, fmt.Errorf("project name %q would escape output directory", opts.Name)
 	}
 
