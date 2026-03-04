@@ -187,16 +187,17 @@ type argData struct {
 }
 
 type toolGoData struct {
-	ToolkitName string
-	ToolName    string // original name used in string literals (e.g., "check-health")
-	GoName      string // sanitized Go identifier (e.g., "checkHealth")
-	Description string
-	Args        []argData
-	Flags       []flagData
-	HasAuth     bool
-	AuthType    string
-	TokenEnv    string
-	TokenFlag   string
+	ToolkitName      string
+	ToolName         string // original name used in string literals (e.g., "check-health")
+	GoName           string // sanitized Go identifier (e.g., "checkHealth")
+	Description      string
+	Args             []argData
+	Flags            []flagData
+	HasAuth          bool
+	AuthType         string
+	TokenEnv         string
+	TokenFlag        string
+	HasNonStringArgs bool // true if any arg needs strconv parsing
 }
 
 type goModData struct {
@@ -303,17 +304,26 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 	// flag name.
 	tokenFlag := strings.TrimPrefix(auth.TokenFlag, "--")
 
+	hasNonStringArgs := false
+	for _, a := range args {
+		if a.GoType != "string" {
+			hasNonStringArgs = true
+			break
+		}
+	}
+
 	return toolGoData{
-		ToolkitName: m.Metadata.Name,
-		ToolName:    tool.Name,
-		GoName:      goIdentifier(tool.Name),
-		Description: tool.Description,
-		Args:        args,
-		Flags:       flags,
-		HasAuth:     hasAuth,
-		AuthType:    auth.Type,
-		TokenEnv:    auth.TokenEnv,
-		TokenFlag:   tokenFlag,
+		ToolkitName:      m.Metadata.Name,
+		ToolName:         tool.Name,
+		GoName:           goIdentifier(tool.Name),
+		Description:      tool.Description,
+		Args:             args,
+		Flags:            flags,
+		HasAuth:          hasAuth,
+		AuthType:         auth.Type,
+		TokenEnv:         auth.TokenEnv,
+		TokenFlag:        tokenFlag,
+		HasNonStringArgs: hasNonStringArgs,
 	}
 }
 
@@ -478,6 +488,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+{{- if .HasNonStringArgs}}
+	"strconv"
+{{- end}}
 
 	"github.com/spf13/cobra"
 )
@@ -520,11 +533,25 @@ var {{.GoName}}Cmd = &cobra.Command{
 {{- end}}
 	RunE: func(cmd *cobra.Command, args []string) error {
 {{- range $i, $a := .Args}}
-		var arg{{$a.GoName}} {{$a.GoType}} //nolint:ineffassign // positional arg {{$a.Name}} index {{$i}}
-		_ = arg{{$a.GoName}}
-		if len(args) > {{$i}} {
-			_ = fmt.Sprintf("%v", args[{{$i}}]) // arg: {{$a.Name}} ({{$a.GoType}})
+{{- if eq $a.GoType "string"}}
+		arg{{$a.GoName}} := args[{{$i}}] // {{$a.GoType}}
+{{- else if eq $a.GoType "int"}}
+		arg{{$a.GoName}}, err := strconv.Atoi(args[{{$i}}]) // {{$a.GoType}}
+		if err != nil {
+			return fmt.Errorf("invalid value %q for argument {{$a.Name}}: %w", args[{{$i}}], err)
 		}
+{{- else if eq $a.GoType "float64"}}
+		arg{{$a.GoName}}, err := strconv.ParseFloat(args[{{$i}}], 64) // {{$a.GoType}}
+		if err != nil {
+			return fmt.Errorf("invalid value %q for argument {{$a.Name}}: %w", args[{{$i}}], err)
+		}
+{{- else if eq $a.GoType "bool"}}
+		arg{{$a.GoName}}, err := strconv.ParseBool(args[{{$i}}]) // {{$a.GoType}}
+		if err != nil {
+			return fmt.Errorf("invalid value %q for argument {{$a.Name}}: %w", args[{{$i}}], err)
+		}
+{{- end}}
+		_ = arg{{$a.GoName}}
 {{- end}}
 {{- if $hasAuth}}
 		// Resolve auth token: prefer flag, fall back to env var.
@@ -626,6 +653,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 
@@ -670,16 +698,31 @@ authorization code for an access token.` + "`" + `,
 		fmt.Fprintf(os.Stdout, "Open the following URL to authenticate:\n%s\n", authURL)
 
 		// Start a local callback server bound to loopback only (defense-in-depth).
-		_ = codeVerifier // used in token exchange (not shown in scaffold)
+		codeCh := make(chan string, 1)
 		mux := http.NewServeMux()
 		mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+			code := r.URL.Query().Get("code")
 			fmt.Fprintln(w, "Authentication complete. You may close this tab.")
+			codeCh <- code
 		})
-		srv := &http.Server{
-			Addr:    "127.0.0.1:0",
-			Handler: mux,
+
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return fmt.Errorf("starting callback server: %w", err)
 		}
-		_ = srv
+		callbackPort := listener.Addr().(*net.TCPAddr).Port
+		fmt.Fprintf(os.Stdout, "Callback listening on http://127.0.0.1:%d/callback\n", callbackPort)
+
+		srv := &http.Server{Handler: mux}
+		go func() { _ = srv.Serve(listener) }()
+
+		// Wait for the authorization code from the callback.
+		authCode := <-codeCh
+		_ = srv.Close()
+
+		// TODO: Exchange authCode + codeVerifier for an access token at the provider's token endpoint.
+		_, _ = authCode, codeVerifier
+		fmt.Fprintln(os.Stdout, "Login successful.")
 		return nil
 	},
 }
