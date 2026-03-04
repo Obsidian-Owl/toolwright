@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -158,6 +159,12 @@ func runGenerateMCP(cmd *cobra.Command, cfg *generateConfig) error {
 
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	force, _ := cmd.Flags().GetBool("force")
+	transport, _ := cmd.Flags().GetString("transport")
+
+	// Override manifest transport with CLI flag value.
+	if transport != "" {
+		tk.Generate.MCP.Transport = strings.Split(transport, ",")
+	}
 
 	opts := codegen.GenerateOptions{
 		Mode:      "mcp",

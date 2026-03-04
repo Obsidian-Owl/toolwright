@@ -21,6 +21,7 @@ func (parseDirAdapter) ParseDir(dir string) ([]tooltest.TestSuite, error) {
 // and production dependencies. This is the main entry point for the CLI binary.
 func BuildRootCommand() *cobra.Command {
 	root := NewRootCommand()
+	root.Version = Version
 
 	// Commands with no external dependencies.
 	root.AddCommand(newValidateCmd())
