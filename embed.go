@@ -6,3 +6,8 @@ import "embed"
 //
 //go:embed schemas/*
 var Schemas embed.FS
+
+// InitTemplates contains the embedded project template files for init scaffolding.
+//
+//go:embed all:templates/init
+var InitTemplates embed.FS
