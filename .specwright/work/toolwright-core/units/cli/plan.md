@@ -114,3 +114,41 @@
 | `templates/init/*` | Create | embedded assets |
 | `cmd/toolwright/main.go` | Replace | main |
 | `go.mod` | Update | root (add cobra, bubbletea, lipgloss) |
+
+## As-Built Notes
+
+### Plan Deviations
+
+1. **Tasks 1+2 merged (P1)**: Root command and helpers were tightly coupled (shared test surface), merged into one TDD cycle.
+2. **Tasks 10+11 merged (P1)**: Init command and templates share the scaffolder interface; tested together via mock injection. Actual template files (`templates/init/*`) and TUI wizard (`internal/tui/wizard.go`) deferred — CLI layer uses `scaffolder` and `initWizard` interfaces. Production implementations will be wired when those packages exist.
+3. **Task 12 scoped to CLI layer**: `generate manifest` subcommand uses `manifestGenerator` interface. Actual AI provider implementations (`internal/generate/*.go`) deferred — the CLI delegates to an injected interface, following the same pattern as all other commands.
+4. **No bubbletea/lipgloss added**: TUI wizard deferred behind `initWizard` interface. The dependency will be added when the production wizard is implemented.
+5. **`generate manifest` in separate file**: Created `generate_manifest.go` rather than adding to `generate.go` to keep file sizes manageable and separation clear.
+
+### Implementation Decisions
+
+- **Interface injection everywhere**: Every command with external dependencies uses config structs with interfaces (runConfig, testConfig, loginConfig, generateConfig, manifestGenerateConfig, initConfig). This enables full test isolation without mocks of real systems.
+- **`DisableFlagParsing` for run command**: Cobra drops unknown flags, but `toolwright run` needs to pass tool-specific flags through. Solved with `DisableFlagParsing: true` and manual flag extraction.
+- **`text/tabwriter` for list**: Human-readable table output uses Go stdlib tabwriter rather than adding a dependency.
+- **Runtime validation for init**: Only shell/go/python/typescript accepted, case-sensitive. Invalid values rejected before scaffolder is called.
+- **Version via ldflags**: `Version`, `Commit`, `BuildDate` are package-level vars in `version.go`, settable via `-ldflags` at build time. Defaults to "dev"/"unknown"/"unknown".
+
+### Actual File Paths
+
+| File | Lines | Tests |
+|------|-------|-------|
+| `internal/cli/root.go` | 67 | 65 (root_test.go) |
+| `internal/cli/helpers.go` | 57 | 72 (helpers_test.go) |
+| `internal/cli/validate.go` | 124 | 39 (validate_test.go) |
+| `internal/cli/list.go` | 71 | 31 (list_test.go) |
+| `internal/cli/describe.go` | 178 | 58 (describe_test.go) |
+| `internal/cli/run.go` | 202 | 46 (run_test.go) |
+| `internal/cli/test.go` | 171 | 32 (test_test.go) |
+| `internal/cli/login.go` | 166 | 30 (login_test.go) |
+| `internal/cli/generate.go` | 200 | 64 (generate_test.go) |
+| `internal/cli/generate_manifest.go` | 129 | 41 (generate_manifest_test.go) |
+| `internal/cli/init.go` | 167 | 40 (init_test.go) |
+| `internal/cli/version.go` | 49 | 25 (version_test.go) |
+| `internal/cli/wire.go` | 75 | 14 (wire_test.go) |
+| `cmd/toolwright/main.go` | 10 | — |
+| **Total** | **~1,666 impl** | **~557 tests** |
