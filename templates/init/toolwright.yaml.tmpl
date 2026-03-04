@@ -1,0 +1,25 @@
+apiVersion: toolwright/v1
+kind: Toolkit
+metadata:
+  name: {{.Name}}
+  version: 0.1.0
+  description: {{.Description}}
+tools:
+  - name: hello
+    description: Hello world tool
+    entrypoint: bin/hello
+    output:
+      format: json
+      schema: schemas/hello-output.json
+{{- if eq .Auth "token"}}
+auth:
+  type: token
+  token_env: {{.Name | upper}}_TOKEN
+  token_flag: --token
+{{- else if eq .Auth "oauth2"}}
+auth:
+  type: oauth2
+  provider_url: https://auth.example.com
+  scopes:
+    - read
+{{- end}}

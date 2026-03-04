@@ -1,0 +1,17 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+func main() {
+	out := map[string]string{"message": "hello"}
+	data, err := json.Marshal(out)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+}
