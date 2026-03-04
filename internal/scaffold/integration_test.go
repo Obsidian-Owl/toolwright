@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	toolwright "github.com/Obsidian-Owl/toolwright"
-	"github.com/Obsidian-Owl/toolwright/internal/cli"
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,7 +122,7 @@ func TestIntegration_Scaffold_AllRuntimes(t *testing.T) {
 			description := "Integration test for " + tc.runtime
 
 			s := New(toolwright.InitTemplates)
-			result, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+			result, err := s.Scaffold(context.Background(), ScaffoldOptions{
 				Name:        projectName,
 				Description: description,
 				OutputDir:   tmpDir,
@@ -206,7 +205,7 @@ func TestIntegration_Manifest_ParseAndValidate(t *testing.T) {
 			projectName := "valid-" + runtime
 
 			s := New(toolwright.InitTemplates)
-			_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+			_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 				Name:        projectName,
 				Description: "Manifest validation test",
 				OutputDir:   tmpDir,
@@ -257,7 +256,7 @@ func TestIntegration_Manifest_TokenAuth(t *testing.T) {
 	projectName := "auth-token-proj"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: "Token auth test",
 		OutputDir:   tmpDir,
@@ -286,7 +285,7 @@ func TestIntegration_Manifest_OAuth2Auth(t *testing.T) {
 	projectName := "auth-oauth2-proj"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: "OAuth2 auth test",
 		OutputDir:   tmpDir,
@@ -321,7 +320,7 @@ func TestIntegration_TemplateRendering_ProjectNameInContent(t *testing.T) {
 	description := "Unique description for rendering test"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: description,
 		OutputDir:   tmpDir,
@@ -368,7 +367,7 @@ func TestIntegration_StaticFile_SchemaJSON_IsValidJSON(t *testing.T) {
 	projectName := "static-check"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: "Static file test",
 		OutputDir:   tmpDir,
@@ -417,7 +416,7 @@ func TestIntegration_TypeScript_PackageJSON(t *testing.T) {
 	description := "TypeScript package.json test"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: description,
 		OutputDir:   tmpDir,
@@ -453,7 +452,7 @@ func TestIntegration_TypeScript_SourceFile(t *testing.T) {
 	projectName := "ts-src-test"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: "TS source test",
 		OutputDir:   tmpDir,
@@ -481,7 +480,7 @@ func TestIntegration_Go_MainFile(t *testing.T) {
 	projectName := "go-main-test"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: "Go main test",
 		OutputDir:   tmpDir,
@@ -511,7 +510,7 @@ func TestIntegration_Python_Entrypoint(t *testing.T) {
 	projectName := "py-entry-test"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: "Python entrypoint test",
 		OutputDir:   tmpDir,
@@ -541,7 +540,7 @@ func TestIntegration_TestScenarioFile(t *testing.T) {
 	projectName := "scenario-test"
 
 	s := New(toolwright.InitTemplates)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        projectName,
 		Description: "Test scenario check",
 		OutputDir:   tmpDir,

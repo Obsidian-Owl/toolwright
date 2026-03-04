@@ -5,27 +5,14 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Obsidian-Owl/toolwright/internal/scaffold"
 )
-
-// ScaffoldOptions describes what the scaffolder should create.
-type ScaffoldOptions struct {
-	Name        string
-	Description string
-	OutputDir   string
-	Runtime     string
-	Auth        string
-}
-
-// ScaffoldResult describes what the scaffolder created.
-type ScaffoldResult struct {
-	Dir   string
-	Files []string
-}
 
 // scaffolder abstracts project scaffolding so the CLI layer can be tested
 // without real filesystem writes or embedded templates.
 type scaffolder interface {
-	Scaffold(ctx context.Context, opts ScaffoldOptions) (*ScaffoldResult, error)
+	Scaffold(ctx context.Context, opts scaffold.ScaffoldOptions) (*scaffold.ScaffoldResult, error)
 }
 
 // WizardResult describes the user's choices from the TUI wizard.
@@ -109,14 +96,14 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 		return err
 	}
 
-	var opts ScaffoldOptions
+	var opts scaffold.ScaffoldOptions
 
 	if yes || isCI() {
 		// Non-interactive mode: use flags/defaults.
 		if description == "" {
 			description = fmt.Sprintf("A %s toolkit", name)
 		}
-		opts = ScaffoldOptions{
+		opts = scaffold.ScaffoldOptions{
 			Name:        name,
 			Description: description,
 			OutputDir:   outputDir,
@@ -136,7 +123,7 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 			return err
 		}
 		// Name always comes from the positional arg, not the wizard.
-		opts = ScaffoldOptions{
+		opts = scaffold.ScaffoldOptions{
 			Name:        name,
 			Description: wizResult.Description,
 			OutputDir:   outputDir,

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/Obsidian-Owl/toolwright/internal/cli"
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,6 +47,7 @@ auth:
 auth:
   type: oauth2
   provider_url: https://auth.example.com
+  client_id: your-client-id
   scopes:
     - read
 {{- end}}
@@ -192,7 +192,7 @@ func buildTemplateFS() fstest.MapFS {
 // scaffoldInTempDir is a convenience helper that creates a Scaffolder, scaffolds
 // into a temp directory, and returns the result plus the absolute path of the
 // created project directory.
-func scaffoldInTempDir(t *testing.T, opts cli.ScaffoldOptions) (*cli.ScaffoldResult, string) {
+func scaffoldInTempDir(t *testing.T, opts ScaffoldOptions) (*ScaffoldResult, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	if opts.OutputDir == "" {
@@ -222,7 +222,7 @@ func readProjectFile(t *testing.T, projectDir, relPath string) string {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Shell_CreatesExpectedFiles(t *testing.T) {
-	result, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "my-toolkit",
 		Description: "A test toolkit",
 		Runtime:     "shell",
@@ -261,7 +261,7 @@ func TestScaffold_ResultDir_MatchesExpectedPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	fs := buildTemplateFS()
 	s := New(fs)
-	result, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	result, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "test-proj",
 		Description: "desc",
 		OutputDir:   tmpDir,
@@ -291,7 +291,7 @@ func TestScaffold_OutputDir_Empty_UsesCurrentDirectory(t *testing.T) {
 
 	fs := buildTemplateFS()
 	s := New(fs)
-	result, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	result, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "local-proj",
 		Description: "local project",
 		OutputDir:   "",
@@ -308,7 +308,7 @@ func TestScaffold_OutputDir_Empty_UsesCurrentDirectory(t *testing.T) {
 }
 
 func TestScaffold_ResultFiles_AreRelativePaths(t *testing.T) {
-	result, _ := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, _ := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "relpath-test",
 		Description: "test",
 		Runtime:     "shell",
@@ -324,7 +324,7 @@ func TestScaffold_ResultFiles_AreRelativePaths(t *testing.T) {
 }
 
 func TestScaffold_ResultFiles_NoDuplicates(t *testing.T) {
-	result, _ := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, _ := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "dup-test",
 		Description: "test",
 		Runtime:     "shell",
@@ -347,12 +347,12 @@ func TestScaffold_DifferentNames_DifferentDirectories(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	result1, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	result1, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name: "alpha", Description: "d", OutputDir: tmpDir, Runtime: "shell", Auth: "none",
 	})
 	require.NoError(t, err)
 
-	result2, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	result2, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name: "beta", Description: "d", OutputDir: tmpDir, Runtime: "shell", Auth: "none",
 	})
 	require.NoError(t, err)
@@ -368,7 +368,7 @@ func TestScaffold_DifferentNames_DifferentDirectories(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Shell_BinHello_IsExecutable(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "exec-test", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -382,7 +382,7 @@ func TestScaffold_Shell_BinHello_IsExecutable(t *testing.T) {
 }
 
 func TestScaffold_Shell_BinHello_HasBashShebang(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "shebang-test", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -393,7 +393,7 @@ func TestScaffold_Shell_BinHello_HasBashShebang(t *testing.T) {
 }
 
 func TestScaffold_Shell_BinHello_OutputsValidJSON(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "json-test", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -430,7 +430,7 @@ func TestScaffold_Shell_BinHello_OutputsValidJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Go_CreatesExpectedFiles(t *testing.T) {
-	result, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "go-proj", Description: "d", Runtime: "go", Auth: "none",
 	})
 
@@ -451,7 +451,7 @@ func TestScaffold_Go_CreatesExpectedFiles(t *testing.T) {
 }
 
 func TestScaffold_Go_BinHello_IsWrapper(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "go-wrapper", Description: "d", Runtime: "go", Auth: "none",
 	})
 
@@ -466,7 +466,7 @@ func TestScaffold_Go_BinHello_IsWrapper(t *testing.T) {
 }
 
 func TestScaffold_Go_BinHello_IsExecutable(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "go-exec", Description: "d", Runtime: "go", Auth: "none",
 	})
 
@@ -477,7 +477,7 @@ func TestScaffold_Go_BinHello_IsExecutable(t *testing.T) {
 }
 
 func TestScaffold_Go_MainGo_HasPackageMain(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "go-main", Description: "d", Runtime: "go", Auth: "none",
 	})
 
@@ -492,7 +492,7 @@ func TestScaffold_Go_MainGo_HasPackageMain(t *testing.T) {
 }
 
 func TestScaffold_Go_MainGo_ImportsJSON(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "go-import", Description: "d", Runtime: "go", Auth: "none",
 	})
 
@@ -506,7 +506,7 @@ func TestScaffold_Go_MainGo_ImportsJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Python_BinHello_HasPython3Shebang(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "py-proj", Description: "d", Runtime: "python", Auth: "none",
 	})
 
@@ -517,7 +517,7 @@ func TestScaffold_Python_BinHello_HasPython3Shebang(t *testing.T) {
 }
 
 func TestScaffold_Python_BinHello_IsExecutable(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "py-exec", Description: "d", Runtime: "python", Auth: "none",
 	})
 
@@ -528,7 +528,7 @@ func TestScaffold_Python_BinHello_IsExecutable(t *testing.T) {
 }
 
 func TestScaffold_Python_BinHello_OutputsJSONWithMessage(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "py-json", Description: "d", Runtime: "python", Auth: "none",
 	})
 
@@ -546,7 +546,7 @@ func TestScaffold_Python_BinHello_OutputsJSONWithMessage(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_TypeScript_CreatesExpectedFiles(t *testing.T) {
-	result, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "ts-proj", Description: "d", Runtime: "typescript", Auth: "none",
 	})
 
@@ -566,7 +566,7 @@ func TestScaffold_TypeScript_CreatesExpectedFiles(t *testing.T) {
 }
 
 func TestScaffold_TypeScript_BinHello_IsExecutable(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "ts-exec", Description: "d", Runtime: "typescript", Auth: "none",
 	})
 
@@ -577,7 +577,7 @@ func TestScaffold_TypeScript_BinHello_IsExecutable(t *testing.T) {
 }
 
 func TestScaffold_TypeScript_IndexTs_OutputsMessage(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "ts-index", Description: "d", Runtime: "typescript", Auth: "none",
 	})
 
@@ -589,7 +589,7 @@ func TestScaffold_TypeScript_IndexTs_OutputsMessage(t *testing.T) {
 }
 
 func TestScaffold_TypeScript_PackageJSON_IsValidJSON(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "ts-pkg", Description: "A typescript toolkit", Runtime: "typescript", Auth: "none",
 	})
 
@@ -603,7 +603,7 @@ func TestScaffold_TypeScript_PackageJSON_IsValidJSON(t *testing.T) {
 }
 
 func TestScaffold_TypeScript_PackageJSON_HasDependencies(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "ts-deps", Description: "d", Runtime: "typescript", Auth: "none",
 	})
 
@@ -627,7 +627,7 @@ func TestScaffold_Manifest_ValidForAllRuntimes(t *testing.T) {
 
 	for _, rt := range runtimes {
 		t.Run("runtime="+rt, func(t *testing.T) {
-			_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+			_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 				Name:        "valid-" + rt,
 				Description: "A " + rt + " toolkit",
 				Runtime:     rt,
@@ -650,7 +650,7 @@ func TestScaffold_Manifest_ValidForAllRuntimes(t *testing.T) {
 }
 
 func TestScaffold_Manifest_HasRequiredTopLevelFields(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "fields-test", Description: "A test toolkit", Runtime: "shell", Auth: "none",
 	})
 
@@ -671,7 +671,7 @@ func TestScaffold_Manifest_HasRequiredTopLevelFields(t *testing.T) {
 }
 
 func TestScaffold_Manifest_ReferencesEntrypoint(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "ep-test", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -685,7 +685,7 @@ func TestScaffold_Manifest_ReferencesEntrypoint(t *testing.T) {
 }
 
 func TestScaffold_Manifest_ToolNameIsHello(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "toolname-test", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -700,10 +700,10 @@ func TestScaffold_Manifest_ToolNameIsHello(t *testing.T) {
 
 func TestScaffold_Manifest_NameVariesWithProject(t *testing.T) {
 	// Anti-hardcoding: two different project names should produce different manifest names.
-	_, projDir1 := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projDir1 := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "alpha-tool", Description: "d", Runtime: "shell", Auth: "none",
 	})
-	_, projDir2 := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projDir2 := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "beta-tool", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -724,7 +724,7 @@ func TestScaffold_Manifest_NameVariesWithProject(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Manifest_AuthNone_NoAuthBlock(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "noauth", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -737,7 +737,7 @@ func TestScaffold_Manifest_AuthNone_NoAuthBlock(t *testing.T) {
 }
 
 func TestScaffold_Manifest_AuthToken_HasTokenFields(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "tokenauth", Description: "d", Runtime: "shell", Auth: "token",
 	})
 
@@ -754,7 +754,7 @@ func TestScaffold_Manifest_AuthToken_HasTokenFields(t *testing.T) {
 }
 
 func TestScaffold_Manifest_AuthOAuth2_HasOAuthFields(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "oauthtest", Description: "d", Runtime: "shell", Auth: "oauth2",
 	})
 
@@ -768,6 +768,8 @@ func TestScaffold_Manifest_AuthOAuth2_HasOAuthFields(t *testing.T) {
 		"auth block type must be 'oauth2'")
 	assert.NotEmpty(t, tk.Auth.ProviderURL,
 		"oauth2 auth must have provider_url field")
+	assert.NotEmpty(t, tk.Auth.ClientID,
+		"oauth2 auth must have client_id field")
 	assert.NotEmpty(t, tk.Auth.Scopes,
 		"oauth2 auth must have scopes field")
 }
@@ -785,7 +787,7 @@ func TestScaffold_Manifest_AuthVariants_StillPassValidation(t *testing.T) {
 
 	for _, tc := range auths {
 		t.Run(tc.name, func(t *testing.T) {
-			_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+			_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 				Name:        "auth-valid-" + tc.name,
 				Description: "d",
 				Runtime:     "shell",
@@ -809,7 +811,7 @@ func TestScaffold_Manifest_AuthVariants_StillPassValidation(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_TestYAML_IsValidYAML(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "testyaml", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -822,7 +824,7 @@ func TestScaffold_TestYAML_IsValidYAML(t *testing.T) {
 }
 
 func TestScaffold_TestYAML_NamesToolHello(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "testname", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -834,7 +836,7 @@ func TestScaffold_TestYAML_NamesToolHello(t *testing.T) {
 }
 
 func TestScaffold_TestYAML_AssertsMessageField(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "testassert", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -849,7 +851,7 @@ func TestScaffold_TestYAML_AssertsMessageField(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Schema_IsValidJSON(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "schematest", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -860,7 +862,7 @@ func TestScaffold_Schema_IsValidJSON(t *testing.T) {
 }
 
 func TestScaffold_Schema_IsJSONSchema(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "jsonschema", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -877,7 +879,7 @@ func TestScaffold_Schema_IsJSONSchema(t *testing.T) {
 }
 
 func TestScaffold_Schema_RequiresMessageProperty(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "schemamsg", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -913,7 +915,7 @@ func TestScaffold_ExistingDirectory_ReturnsError(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	result, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	result, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "existing-proj",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -933,7 +935,7 @@ func TestScaffold_ExistingDirectory_ErrorContainsPath(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "conflict-proj",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -958,7 +960,7 @@ func TestScaffold_ExistingDirectory_NoPartialFiles(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	_, _ = s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, _ = s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "partial-test",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -982,7 +984,7 @@ func TestScaffold_ExistingDirectory_EvenIfEmpty_StillRejected(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "empty-existing",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -1021,7 +1023,7 @@ func TestScaffold_BadTemplate_NoFilesWritten(t *testing.T) {
 	tmpDir := t.TempDir()
 	s := New(badFS)
 
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "atomic-fail",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -1060,7 +1062,7 @@ func TestScaffold_BadTemplate_ErrorIdentifiesTemplate(t *testing.T) {
 	tmpDir := t.TempDir()
 	s := New(badFS)
 
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "error-ident",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -1137,14 +1139,14 @@ func TestNew_DifferentFS_DifferentBehavior(t *testing.T) {
 
 	tmpDir1 := t.TempDir()
 	s1 := New(fs1)
-	_, err := s1.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s1.Scaffold(context.Background(), ScaffoldOptions{
 		Name: "fs1-proj", Description: "d", OutputDir: tmpDir1, Runtime: "shell", Auth: "none",
 	})
 	require.NoError(t, err)
 
 	tmpDir2 := t.TempDir()
 	s2 := New(fs2)
-	_, err = s2.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err = s2.Scaffold(context.Background(), ScaffoldOptions{
 		Name: "fs2-proj", Description: "d", OutputDir: tmpDir2, Runtime: "shell", Auth: "none",
 	})
 	require.NoError(t, err)
@@ -1174,7 +1176,7 @@ func TestScaffold_AllRuntimes_CreateSharedFiles(t *testing.T) {
 
 	for _, rt := range runtimes {
 		t.Run("runtime="+rt, func(t *testing.T) {
-			result, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+			result, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 				Name:        "shared-" + rt,
 				Description: "d",
 				Runtime:     rt,
@@ -1197,7 +1199,7 @@ func TestScaffold_AllRuntimes_BinHelloIsExecutable(t *testing.T) {
 
 	for _, rt := range runtimes {
 		t.Run("runtime="+rt, func(t *testing.T) {
-			_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+			_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 				Name:        "perm-" + rt,
 				Description: "d",
 				Runtime:     rt,
@@ -1246,7 +1248,7 @@ func TestScaffold_RuntimeSpecificFiles(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run("runtime="+tc.runtime, func(t *testing.T) {
-			_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+			_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 				Name:        "specific-" + tc.runtime,
 				Description: "d",
 				Runtime:     tc.runtime,
@@ -1272,7 +1274,7 @@ func TestScaffold_RuntimeSpecificFiles(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Description_AppearsInManifest(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "desc-proj",
 		Description: "My unique description 42",
 		Runtime:     "shell",
@@ -1285,7 +1287,7 @@ func TestScaffold_Description_AppearsInManifest(t *testing.T) {
 }
 
 func TestScaffold_Description_AppearsInReadme(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "readme-desc",
 		Description: "Special readme description",
 		Runtime:     "shell",
@@ -1298,7 +1300,7 @@ func TestScaffold_Description_AppearsInReadme(t *testing.T) {
 }
 
 func TestScaffold_Name_AppearsInReadme(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "fancy-toolkit",
 		Description: "d",
 		Runtime:     "shell",
@@ -1315,7 +1317,7 @@ func TestScaffold_Name_AppearsInReadme(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_AllFiles_NonEmpty(t *testing.T) {
-	result, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "nonempty",
 		Description: "d",
 		Runtime:     "shell",
@@ -1335,7 +1337,7 @@ func TestScaffold_AllFiles_NonEmpty(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_ResultFiles_AreSorted(t *testing.T) {
-	result, _ := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, _ := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "sorted-test",
 		Description: "d",
 		Runtime:     "shell",
@@ -1362,7 +1364,7 @@ func TestScaffold_CancelledContext_ReturnsError(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	_, err := s.Scaffold(ctx, cli.ScaffoldOptions{
+	_, err := s.Scaffold(ctx, ScaffoldOptions{
 		Name:        "cancelled",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -1378,7 +1380,7 @@ func TestScaffold_CancelledContext_ReturnsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_NameWithHyphens_Works(t *testing.T) {
-	result, _ := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, _ := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "my-cool-tool",
 		Description: "d",
 		Runtime:     "shell",
@@ -1390,7 +1392,7 @@ func TestScaffold_NameWithHyphens_Works(t *testing.T) {
 }
 
 func TestScaffold_NameWithNumbers_Works(t *testing.T) {
-	result, _ := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	result, _ := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "tool42",
 		Description: "d",
 		Runtime:     "shell",
@@ -1411,7 +1413,7 @@ func TestScaffold_Schema_IdenticalAcrossRuntimes(t *testing.T) {
 	var contents []string
 
 	for _, rt := range runtimes {
-		_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+		_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 			Name:        "schema-" + rt,
 			Description: "d",
 			Runtime:     rt,
@@ -1433,7 +1435,7 @@ func TestScaffold_Schema_IdenticalAcrossRuntimes(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Schema_MatchesStaticContent(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name: "schema-static", Description: "d", Runtime: "shell", Auth: "none",
 	})
 
@@ -1456,7 +1458,7 @@ func TestScaffold_StaticFiles_NotTemplateProcessed(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	s := New(trickFS)
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "static-trick",
 		Description: "d",
 		OutputDir:   tmpDir,
@@ -1481,7 +1483,7 @@ func TestScaffold_NonexistentOutputDir_ReturnsError(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name:        "orphan-proj",
 		Description: "d",
 		OutputDir:   "/nonexistent/path/that/does/not/exist",
@@ -1498,7 +1500,7 @@ func TestScaffold_NonexistentOutputDir_ReturnsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScaffold_Readme_HasUsefulContent(t *testing.T) {
-	_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 		Name:        "readme-test",
 		Description: "A readme test project",
 		Runtime:     "shell",
@@ -1527,7 +1529,7 @@ func TestScaffold_Manifest_DifferentRuntimes_SameEntrypoint(t *testing.T) {
 
 	for _, rt := range runtimes {
 		t.Run(rt, func(t *testing.T) {
-			_, projectDir := scaffoldInTempDir(t, cli.ScaffoldOptions{
+			_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
 				Name: "ep-" + rt, Description: "d", Runtime: rt, Auth: "none",
 			})
 
@@ -1550,12 +1552,12 @@ func TestScaffold_MultipleProjects_SameOutputDir(t *testing.T) {
 	fs := buildTemplateFS()
 	s := New(fs)
 
-	_, err := s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
 		Name: "proj-a", Description: "d", OutputDir: tmpDir, Runtime: "shell", Auth: "none",
 	})
 	require.NoError(t, err)
 
-	_, err = s.Scaffold(context.Background(), cli.ScaffoldOptions{
+	_, err = s.Scaffold(context.Background(), ScaffoldOptions{
 		Name: "proj-b", Description: "d", OutputDir: tmpDir, Runtime: "shell", Auth: "none",
 	})
 	require.NoError(t, err)
@@ -1570,6 +1572,29 @@ func TestScaffold_MultipleProjects_SameOutputDir(t *testing.T) {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Security: path traversal rejection
+// ---------------------------------------------------------------------------
+
+func TestScaffold_PathTraversal_ReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	fs := buildTemplateFS()
+	s := New(fs)
+
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
+		Name:        "../../escape",
+		Description: "d",
+		OutputDir:   tmpDir,
+		Runtime:     "shell",
+		Auth:        "none",
+	})
+
+	require.Error(t, err,
+		"project name with path traversal must be rejected")
+	assert.Contains(t, err.Error(), "escape",
+		"error must reference the offending name")
+}
 
 func firstLine(s string) string {
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {

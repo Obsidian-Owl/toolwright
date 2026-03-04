@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Obsidian-Owl/toolwright/internal/scaffold"
 )
 
 // ---------------------------------------------------------------------------
@@ -18,12 +20,12 @@ import (
 
 type mockScaffolder struct {
 	called     bool
-	calledWith ScaffoldOptions
-	result     *ScaffoldResult
+	calledWith scaffold.ScaffoldOptions
+	result     *scaffold.ScaffoldResult
 	err        error
 }
 
-func (m *mockScaffolder) Scaffold(_ context.Context, opts ScaffoldOptions) (*ScaffoldResult, error) {
+func (m *mockScaffolder) Scaffold(_ context.Context, opts scaffold.ScaffoldOptions) (*scaffold.ScaffoldResult, error) {
 	m.called = true
 	m.calledWith = opts
 	if m.err != nil {
@@ -65,8 +67,8 @@ func executeInitCmd(cfg *initConfig, args ...string) (stdout string, err error) 
 }
 
 // defaultScaffoldResult returns a scaffold result suitable for most tests.
-func defaultScaffoldResult(name string) *ScaffoldResult {
-	return &ScaffoldResult{
+func defaultScaffoldResult(name string) *scaffold.ScaffoldResult {
+	return &scaffold.ScaffoldResult{
 		Dir: name,
 		Files: []string{
 			name + "/toolwright.yaml",
@@ -617,7 +619,7 @@ func TestInit_ScaffolderError_JSON_HasStructuredError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInit_Success_JSON_HasFilesAndDir(t *testing.T) {
-	scaf := &mockScaffolder{result: &ScaffoldResult{
+	scaf := &mockScaffolder{result: &scaffold.ScaffoldResult{
 		Dir: "my-tool",
 		Files: []string{
 			"my-tool/toolwright.yaml",
@@ -675,7 +677,7 @@ func TestInit_Success_JSON_IsOnlyJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInit_Success_HumanOutput_MentionsDirectory(t *testing.T) {
-	scaf := &mockScaffolder{result: &ScaffoldResult{
+	scaf := &mockScaffolder{result: &scaffold.ScaffoldResult{
 		Dir: "awesome-tool",
 		Files: []string{
 			"awesome-tool/toolwright.yaml",
@@ -692,7 +694,7 @@ func TestInit_Success_HumanOutput_MentionsDirectory(t *testing.T) {
 }
 
 func TestInit_Success_HumanOutput_MentionsFileCount(t *testing.T) {
-	scaf := &mockScaffolder{result: &ScaffoldResult{
+	scaf := &mockScaffolder{result: &scaffold.ScaffoldResult{
 		Dir: "my-tool",
 		Files: []string{
 			"my-tool/toolwright.yaml",
@@ -711,7 +713,7 @@ func TestInit_Success_HumanOutput_MentionsFileCount(t *testing.T) {
 }
 
 func TestInit_Success_HumanOutput_ListsFiles(t *testing.T) {
-	scaf := &mockScaffolder{result: &ScaffoldResult{
+	scaf := &mockScaffolder{result: &scaffold.ScaffoldResult{
 		Dir: "proj",
 		Files: []string{
 			"proj/toolwright.yaml",
@@ -769,7 +771,7 @@ func TestInit_DifferentRuntimes_DifferentScaffolderCalls(t *testing.T) {
 
 func TestInit_JSON_OutputReflectsScaffolderResult(t *testing.T) {
 	// Two different scaffold results must produce different JSON output.
-	scaf1 := &mockScaffolder{result: &ScaffoldResult{
+	scaf1 := &mockScaffolder{result: &scaffold.ScaffoldResult{
 		Dir:   "proj-a",
 		Files: []string{"proj-a/toolwright.yaml"},
 	}}
@@ -777,7 +779,7 @@ func TestInit_JSON_OutputReflectsScaffolderResult(t *testing.T) {
 	stdout1, err1 := executeInitCmd(cfg1, "--json", "proj-a", "--yes")
 	require.NoError(t, err1)
 
-	scaf2 := &mockScaffolder{result: &ScaffoldResult{
+	scaf2 := &mockScaffolder{result: &scaffold.ScaffoldResult{
 		Dir:   "proj-b",
 		Files: []string{"proj-b/toolwright.yaml", "proj-b/main.go"},
 	}}
@@ -845,7 +847,7 @@ func TestInit_NoYes_RuntimeFlagIgnoredWhenWizardUsed(t *testing.T) {
 
 func TestInit_AllFlagsCombined(t *testing.T) {
 	outDir := t.TempDir()
-	scaf := &mockScaffolder{result: &ScaffoldResult{
+	scaf := &mockScaffolder{result: &scaffold.ScaffoldResult{
 		Dir:   outDir + "/combined-proj",
 		Files: []string{outDir + "/combined-proj/toolwright.yaml"},
 	}}

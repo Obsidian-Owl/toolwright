@@ -10,9 +10,22 @@ import (
 	"sort"
 	"strings"
 	"text/template"
-
-	"github.com/Obsidian-Owl/toolwright/internal/cli"
 )
+
+// ScaffoldOptions describes what the scaffolder should create.
+type ScaffoldOptions struct {
+	Name        string
+	Description string
+	OutputDir   string
+	Runtime     string
+	Auth        string
+}
+
+// ScaffoldResult describes what the scaffolder created.
+type ScaffoldResult struct {
+	Dir   string
+	Files []string
+}
 
 // templateData is the data struct passed to every template during rendering.
 type templateData struct {
@@ -125,7 +138,7 @@ func New(templates fs.FS) *Scaffolder {
 }
 
 // Scaffold creates a new project directory with rendered template files.
-func (s *Scaffolder) Scaffold(ctx context.Context, opts cli.ScaffoldOptions) (*cli.ScaffoldResult, error) {
+func (s *Scaffolder) Scaffold(ctx context.Context, opts ScaffoldOptions) (*ScaffoldResult, error) {
 	// Check context before doing any work.
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("context cancelled: %w", err)
@@ -148,6 +161,12 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts cli.ScaffoldOptions) (*c
 
 	// Compute the target project directory.
 	projectDir := filepath.Join(outputDir, opts.Name)
+
+	// Reject names that escape the output directory (path traversal defense).
+	rel, err := filepath.Rel(outputDir, projectDir)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("project name %q would escape output directory", opts.Name)
+	}
 
 	// Reject if the project directory already exists.
 	if _, err := os.Stat(projectDir); err == nil {
@@ -237,7 +256,7 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts cli.ScaffoldOptions) (*c
 		return nil, fmt.Errorf("resolve absolute path for %q: %w", projectDir, err)
 	}
 
-	return &cli.ScaffoldResult{
+	return &ScaffoldResult{
 		Dir:   absDir,
 		Files: files,
 	}, nil
