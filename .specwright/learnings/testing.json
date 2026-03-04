@@ -1,0 +1,34 @@
+{
+  "workId": "testing",
+  "timestamp": "2026-03-03T17:30:00Z",
+  "findings": [
+    {
+      "category": "architecture",
+      "source": "testing unit — renamed internal/testing/ to internal/tooltest/",
+      "description": "Go stdlib package name collision forced mid-build rename. The package internal/testing/ shadowed the stdlib testing package, requiring awkward import aliases.",
+      "proposedRule": "P8: Check stdlib package name collisions during planning — use go doc <name> to verify the name is free before committing.",
+      "disposition": "promoted:patterns"
+    },
+    {
+      "category": "testing",
+      "source": "testing unit — ToolExecutor interface in runner.go",
+      "description": "Defining a one-method ToolExecutor interface at the consumer site (tooltest) allowed full mock injection without depending on the real runner package in tests. Mock struct tracked concurrency via atomics for parallel execution verification.",
+      "proposedRule": "P9: Interface wrapping enables mock injection — define one-method interface at consumer site, not provider.",
+      "disposition": "promoted:patterns"
+    },
+    {
+      "category": "security",
+      "source": "testing unit — TestResult/TestReport have no AuthToken field",
+      "description": "By structurally excluding the auth token from output data models (TestResult, TestReport), it becomes impossible for formatters (TAP, JSON) to accidentally leak tokens. This is stronger than runtime scrubbing.",
+      "proposedRule": "23a: Exclude secrets from output data models structurally — if a type flows to formatters or serializers, it must not have a token field.",
+      "disposition": "promoted:constitution"
+    },
+    {
+      "category": "retrospective",
+      "source": "testing unit — clean first push (vs runner's 4 CI failures)",
+      "description": "Runner unit learnings (P7 pre-push hooks mirror CI, constitution 1a linter pinning) prevented CI failures in the testing unit. First push was clean.",
+      "proposedRule": null,
+      "disposition": "dismissed"
+    }
+  ]
+}
