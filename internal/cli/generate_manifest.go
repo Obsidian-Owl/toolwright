@@ -81,6 +81,9 @@ func runGenerateManifest(cmd *cobra.Command, cfg *manifestGenerateConfig) error 
 		DryRun:      dryRun,
 	}
 
+	if cfg.Generator == nil {
+		return fmt.Errorf("AI manifest generation is not yet implemented")
+	}
 	result, err := cfg.Generator.Generate(cmd.Context(), opts)
 	if err != nil {
 		if jsonMode {

@@ -155,7 +155,7 @@ func openBrowser(url string) error {
 	var args []string
 	switch runtime.GOOS {
 	case "windows":
-		args = []string{"cmd", "/c", "start", url}
+		args = []string{"rundll32", "url.dll,FileProtocolHandler", url}
 	case "darwin":
 		args = []string{"open", url}
 	default:

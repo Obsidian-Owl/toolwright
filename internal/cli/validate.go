@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -89,7 +91,10 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	// Online checks.
 	if online && tk.Auth != nil && tk.Auth.ProviderURL != "" {
-		resp, httpErr := http.Head(tk.Auth.ProviderURL) //nolint:noctx // simple reachability check; no request context needed
+		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodHead, tk.Auth.ProviderURL, nil)
+		resp, httpErr := http.DefaultClient.Do(req)
 		if httpErr != nil {
 			warns = append(warns, validateItem{
 				Path:    "auth.provider_url",

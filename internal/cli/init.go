@@ -125,6 +125,9 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 		}
 	} else {
 		// Interactive mode: run the wizard.
+		if cfg.Wizard == nil {
+			return fmt.Errorf("interactive wizard is not yet implemented; use --yes or set CI=true")
+		}
 		wizResult, err := cfg.Wizard.Run(cmd.Context())
 		if err != nil {
 			if jsonMode {
@@ -142,6 +145,9 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 		}
 	}
 
+	if cfg.Scaffolder == nil {
+		return fmt.Errorf("project scaffolding is not yet implemented")
+	}
 	result, err := cfg.Scaffolder.Scaffold(cmd.Context(), opts)
 	if err != nil {
 		if jsonMode {

@@ -150,7 +150,7 @@ func extractRunFlags(args []string) (jsonMode bool, manifestPath, tokenFlagValue
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "--json":
+		case arg == "--json", strings.HasPrefix(arg, "--json="):
 			jsonMode = true
 		case arg == "--manifest" || arg == "-m":
 			if i+1 < len(args) {
