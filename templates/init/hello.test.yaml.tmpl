@@ -1,0 +1,8 @@
+name: hello-test
+tool: hello
+steps:
+  - name: hello outputs message
+    assert:
+      output:
+        contains:
+          message: hello

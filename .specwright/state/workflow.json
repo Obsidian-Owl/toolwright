@@ -1,31 +1,23 @@
 {
   "version": "2.0",
   "currentWork": {
-    "id": "toolwright-core",
-    "description": "Design and implement Toolwright CLI framework from spec",
-    "status": "verifying",
-    "workDir": ".specwright/work/toolwright-core/units/cli",
-    "unitId": "cli",
-    "tasksTotal": 11,
-    "tasksCompleted": ["task-1-2-root-helpers", "task-3-validate", "task-4-list", "task-5-describe", "task-6-run", "task-7-test", "task-8-login", "task-9-generate", "task-10-11-init", "task-12-ai-manifest", "task-13-main"],
+    "id": "toolwright-completions",
+    "description": "Implement remaining design vision: init scaffolding, TUI wizard, AI manifest generation, infrastructure wiring",
+    "status": "shipped",
+    "workDir": ".specwright/work/toolwright-completions/units/tui",
+    "unitId": "tui",
+    "tasksTotal": null,
+    "tasksCompleted": [],
     "currentTask": null,
     "intensity": "full"
   },
-  "gates": {
-    "build": { "status": "PASS", "timestamp": "2026-03-04T00:00:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } },
-    "tests": { "status": "PASS", "timestamp": "2026-03-04T00:00:00Z", "findings": { "block": 0, "warn": 0, "info": 0 } },
-    "security": { "status": "PASS", "timestamp": "2026-03-04T00:00:00Z", "findings": { "block": 0, "warn": 1, "info": 2 } },
-    "wiring": { "status": "PASS", "timestamp": "2026-03-04T00:00:00Z", "findings": { "block": 0, "warn": 4, "info": 5 } },
-    "spec": { "status": "PASS", "timestamp": "2026-03-04T00:00:00Z", "findings": { "block": 0, "warn": 7, "info": 0 } }
-  },
+  "gates": {},
   "workUnits": [
-    { "id": "manifest", "description": "Go module, project structure, manifest types/parser/validation, JSON Schema validator", "status": "shipped", "order": 1, "workDir": ".specwright/work/toolwright-core/units/manifest", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/1" },
-    { "id": "auth", "description": "Token resolver chain, keyring storage, fallback file store, OAuth 2.1 PKCE flow", "status": "shipped", "order": 2, "workDir": ".specwright/work/toolwright-core/units/auth", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/2" },
-    { "id": "runner", "description": "Process execution, arg mapping, token injection, timeout, output capture", "status": "shipped", "order": 3, "workDir": ".specwright/work/toolwright-core/units/runner", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/4" },
-    { "id": "testing", "description": "Test YAML parser, JSONPath assertions, TAP + JSON output", "status": "shipped", "order": 4, "workDir": ".specwright/work/toolwright-core/units/testing", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/7" },
-    { "id": "codegen", "description": "Generator interface, Go CLI templates, TypeScript MCP templates", "status": "shipped", "order": 5, "workDir": ".specwright/work/toolwright-core/units/codegen", "pr": "https://github.com/Obsidian-Owl/toolwright/pull/8" },
-    { "id": "cli", "description": "Cobra commands, TUI wizard, init scaffolding, AI generation, main.go", "status": "building", "order": 6, "workDir": ".specwright/work/toolwright-core/units/cli" }
+    { "id": "scaffold", "description": "Template files, scaffold package, embed.go for templates", "status": "shipped", "order": 1, "workDir": ".specwright/work/toolwright-completions/units/scaffold" },
+    { "id": "tui", "description": "Bubble Tea wizard package using huh", "status": "building", "order": 2, "workDir": ".specwright/work/toolwright-completions/units/tui" },
+    { "id": "generate", "description": "AI manifest generator with 3 LLM providers, CLI flag additions", "status": "planned", "order": 3, "workDir": ".specwright/work/toolwright-completions/units/generate" },
+    { "id": "wiring", "description": "JSON Schema, exit codes, debug logging, wire.go production wiring, cleanup", "status": "planned", "order": 4, "workDir": ".specwright/work/toolwright-completions/units/wiring" }
   ],
   "lock": null,
-  "lastUpdated": "2026-03-04T00:00:00Z"
+  "lastUpdated": "2026-03-05T12:00:00Z"
 }

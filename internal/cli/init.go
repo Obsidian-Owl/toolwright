@@ -5,27 +5,14 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Obsidian-Owl/toolwright/internal/scaffold"
 )
-
-// ScaffoldOptions describes what the scaffolder should create.
-type ScaffoldOptions struct {
-	Name        string
-	Description string
-	OutputDir   string
-	Runtime     string
-	Auth        string
-}
-
-// ScaffoldResult describes what the scaffolder created.
-type ScaffoldResult struct {
-	Dir   string
-	Files []string
-}
 
 // scaffolder abstracts project scaffolding so the CLI layer can be tested
 // without real filesystem writes or embedded templates.
 type scaffolder interface {
-	Scaffold(ctx context.Context, opts ScaffoldOptions) (*ScaffoldResult, error)
+	Scaffold(ctx context.Context, opts scaffold.ScaffoldOptions) (*scaffold.ScaffoldResult, error)
 }
 
 // WizardResult describes the user's choices from the TUI wizard.
@@ -61,6 +48,13 @@ var validRuntimes = map[string]bool{
 	"typescript": true,
 }
 
+// validAuths is the set of accepted auth values.
+var validAuths = map[string]bool{
+	"none":   true,
+	"token":  true,
+	"oauth2": true,
+}
+
 // newInitCmd returns the init subcommand. cfg provides injectable dependencies;
 // in production the scaffolder and wizard are wired to real implementations.
 func newInitCmd(cfg *initConfig) *cobra.Command {
@@ -74,6 +68,7 @@ func newInitCmd(cfg *initConfig) *cobra.Command {
 
 	cmd.Flags().BoolP("yes", "y", false, "skip interactive wizard and use defaults")
 	cmd.Flags().StringP("runtime", "r", "shell", "runtime for the project (shell, go, python, typescript)")
+	cmd.Flags().StringP("auth", "a", "none", "authentication mode (none, token, oauth2)")
 	cmd.Flags().StringP("description", "d", "", "short description of the project")
 	cmd.Flags().StringP("output", "o", "", "output directory (default: current directory)")
 
@@ -96,6 +91,7 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 
 	yes, _ := cmd.Flags().GetBool("yes")
 	runtime, _ := cmd.Flags().GetString("runtime")
+	auth, _ := cmd.Flags().GetString("auth")
 	description, _ := cmd.Flags().GetString("description")
 	outputDir, _ := cmd.Flags().GetString("output")
 
@@ -109,19 +105,29 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 		return err
 	}
 
-	var opts ScaffoldOptions
+	// Validate auth mode.
+	if !validAuths[auth] {
+		err := fmt.Errorf("invalid auth %q: must be one of none, token, oauth2", auth)
+		if jsonMode {
+			_ = outputError(cmd.OutOrStdout(), "invalid_auth", err.Error(),
+				"choose one of: none, token, oauth2")
+		}
+		return err
+	}
+
+	var opts scaffold.ScaffoldOptions
 
 	if yes || isCI() {
 		// Non-interactive mode: use flags/defaults.
 		if description == "" {
 			description = fmt.Sprintf("A %s toolkit", name)
 		}
-		opts = ScaffoldOptions{
+		opts = scaffold.ScaffoldOptions{
 			Name:        name,
 			Description: description,
 			OutputDir:   outputDir,
 			Runtime:     runtime,
-			Auth:        "none",
+			Auth:        auth,
 		}
 	} else {
 		// Interactive mode: run the wizard.
@@ -136,7 +142,7 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 			return err
 		}
 		// Name always comes from the positional arg, not the wizard.
-		opts = ScaffoldOptions{
+		opts = scaffold.ScaffoldOptions{
 			Name:        name,
 			Description: wizResult.Description,
 			OutputDir:   outputDir,

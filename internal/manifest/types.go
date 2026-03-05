@@ -49,6 +49,7 @@ type Auth struct {
 	TokenFlag   string     `yaml:"token_flag,omitempty"`
 	TokenHeader string     `yaml:"token_header,omitempty"`
 	ProviderURL string     `yaml:"provider_url,omitempty"`
+	ClientID    string     `yaml:"client_id,omitempty"`
 	Endpoints   *Endpoints `yaml:"endpoints,omitempty"`
 	Scopes      []string   `yaml:"scopes,omitempty"`
 	Audience    string     `yaml:"audience,omitempty"`
