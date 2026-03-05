@@ -48,6 +48,13 @@ var validRuntimes = map[string]bool{
 	"typescript": true,
 }
 
+// validAuths is the set of accepted auth values.
+var validAuths = map[string]bool{
+	"none":   true,
+	"token":  true,
+	"oauth2": true,
+}
+
 // newInitCmd returns the init subcommand. cfg provides injectable dependencies;
 // in production the scaffolder and wizard are wired to real implementations.
 func newInitCmd(cfg *initConfig) *cobra.Command {
@@ -61,6 +68,7 @@ func newInitCmd(cfg *initConfig) *cobra.Command {
 
 	cmd.Flags().BoolP("yes", "y", false, "skip interactive wizard and use defaults")
 	cmd.Flags().StringP("runtime", "r", "shell", "runtime for the project (shell, go, python, typescript)")
+	cmd.Flags().StringP("auth", "a", "none", "authentication mode (none, token, oauth2)")
 	cmd.Flags().StringP("description", "d", "", "short description of the project")
 	cmd.Flags().StringP("output", "o", "", "output directory (default: current directory)")
 
@@ -83,6 +91,7 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 
 	yes, _ := cmd.Flags().GetBool("yes")
 	runtime, _ := cmd.Flags().GetString("runtime")
+	auth, _ := cmd.Flags().GetString("auth")
 	description, _ := cmd.Flags().GetString("description")
 	outputDir, _ := cmd.Flags().GetString("output")
 
@@ -92,6 +101,16 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 		if jsonMode {
 			_ = outputError(cmd.OutOrStdout(), "invalid_runtime", err.Error(),
 				"choose one of: shell, go, python, typescript")
+		}
+		return err
+	}
+
+	// Validate auth mode.
+	if !validAuths[auth] {
+		err := fmt.Errorf("invalid auth %q: must be one of none, token, oauth2", auth)
+		if jsonMode {
+			_ = outputError(cmd.OutOrStdout(), "invalid_auth", err.Error(),
+				"choose one of: none, token, oauth2")
 		}
 		return err
 	}
@@ -108,7 +127,7 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 			Description: description,
 			OutputDir:   outputDir,
 			Runtime:     runtime,
-			Auth:        "none",
+			Auth:        auth,
 		}
 	} else {
 		// Interactive mode: run the wizard.

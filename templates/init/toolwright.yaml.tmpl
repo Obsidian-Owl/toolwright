@@ -1,9 +1,9 @@
 apiVersion: toolwright/v1
 kind: Toolkit
 metadata:
-  name: {{.Name}}
+  name: "{{.Name | yamlEscape}}"
   version: 0.1.0
-  description: {{.Description}}
+  description: "{{.Description | yamlEscape}}"
 tools:
   - name: hello
     description: Hello world tool

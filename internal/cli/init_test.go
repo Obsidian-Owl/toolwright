@@ -980,3 +980,50 @@ func TestInit_OutputDir_DefaultsToEmpty(t *testing.T) {
 		return outputDir == "" || outputDir == "."
 	}, "OutputDir must default to empty string or '.' when --output is not specified, got: %q", outputDir)
 }
+
+// ---------------------------------------------------------------------------
+// --auth flag: non-interactive mode
+// ---------------------------------------------------------------------------
+
+func TestInit_Auth_DefaultsToNone(t *testing.T) {
+	scaf := &mockScaffolder{result: defaultScaffoldResult("proj")}
+	cfg := &initConfig{Scaffolder: scaf, Wizard: &mockWizard{}}
+
+	_, err := executeInitCmd(cfg, "proj", "--yes")
+	require.NoError(t, err)
+	assert.Equal(t, "none", scaf.calledWith.Auth,
+		"auth must default to 'none' when --auth is not specified")
+}
+
+func TestInit_Auth_TokenFlag(t *testing.T) {
+	scaf := &mockScaffolder{result: defaultScaffoldResult("proj")}
+	cfg := &initConfig{Scaffolder: scaf, Wizard: &mockWizard{}}
+
+	_, err := executeInitCmd(cfg, "proj", "--yes", "--auth", "token")
+	require.NoError(t, err)
+	assert.Equal(t, "token", scaf.calledWith.Auth,
+		"scaffolder must receive auth=token when --auth token is specified")
+}
+
+func TestInit_Auth_OAuth2Flag(t *testing.T) {
+	scaf := &mockScaffolder{result: defaultScaffoldResult("proj")}
+	cfg := &initConfig{Scaffolder: scaf, Wizard: &mockWizard{}}
+
+	_, err := executeInitCmd(cfg, "proj", "--yes", "--auth", "oauth2")
+	require.NoError(t, err)
+	assert.Equal(t, "oauth2", scaf.calledWith.Auth,
+		"scaffolder must receive auth=oauth2 when --auth oauth2 is specified")
+}
+
+func TestInit_InvalidAuth_ReturnsError(t *testing.T) {
+	scaf := &mockScaffolder{result: defaultScaffoldResult("proj")}
+	cfg := &initConfig{Scaffolder: scaf, Wizard: &mockWizard{}}
+
+	_, err := executeInitCmd(cfg, "proj", "--yes", "--auth", "ldap")
+	require.Error(t, err,
+		"invalid auth 'ldap' must return an error")
+	assert.Contains(t, err.Error(), "ldap",
+		"error message must contain the invalid auth value")
+	assert.False(t, scaf.called,
+		"scaffolder must NOT be called with an invalid auth")
+}

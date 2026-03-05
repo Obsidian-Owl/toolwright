@@ -28,9 +28,9 @@ import (
 const manifestTemplate = `apiVersion: toolwright/v1
 kind: Toolkit
 metadata:
-  name: {{.Name}}
+  name: "{{.Name | yamlEscape}}"
   version: 0.1.0
-  description: {{.Description}}
+  description: "{{.Description | yamlEscape}}"
 tools:
   - name: hello
     description: Hello world tool
@@ -1049,10 +1049,11 @@ func TestScaffold_BadTemplate_ErrorIdentifiesTemplate(t *testing.T) {
 			Data: []byte(helloOutputSchema),
 		},
 		"templates/init/hello.test.yaml.tmpl": &fstest.MapFile{
-			Data: []byte(`{{.Boom | undefinedFunc}}`),
+			Data: []byte(testScenarioTemplate),
 		},
+		// README has a bad template function to trigger a render error.
 		"templates/init/README.md.tmpl": &fstest.MapFile{
-			Data: []byte(readmeTemplate),
+			Data: []byte(`{{.Boom | undefinedFunc}}`),
 		},
 		"templates/init/shell/hello.sh.tmpl": &fstest.MapFile{
 			Data: []byte(shellEntrypointTemplate),
@@ -1594,6 +1595,59 @@ func TestScaffold_PathTraversal_ReturnsError(t *testing.T) {
 		"project name with path traversal must be rejected")
 	assert.Contains(t, err.Error(), "escape",
 		"error must reference the offending name")
+}
+
+func TestScaffold_EmptyName_ReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := New(buildTemplateFS())
+
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
+		Name:        "",
+		Description: "d",
+		OutputDir:   tmpDir,
+		Runtime:     "shell",
+		Auth:        "none",
+	})
+
+	require.Error(t, err, "empty project name must be rejected")
+	assert.Contains(t, err.Error(), "empty",
+		"error must mention that the name is empty")
+}
+
+func TestScaffold_UnknownRuntime_ReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := New(buildTemplateFS())
+
+	_, err := s.Scaffold(context.Background(), ScaffoldOptions{
+		Name:        "my-proj",
+		Description: "d",
+		OutputDir:   tmpDir,
+		Runtime:     "rust",
+		Auth:        "none",
+	})
+
+	require.Error(t, err, "unknown runtime must be rejected")
+	assert.Contains(t, err.Error(), "rust",
+		"error must mention the unknown runtime value")
+}
+
+func TestScaffold_DotDotPrefixName_IsAccepted(t *testing.T) {
+	// "..foo" starts with ".." but is NOT a path traversal — it's a valid
+	// directory name that stays within outputDir. The filepath.Clean-based
+	// containment check must accept it (strings.HasPrefix on rel was too eager).
+	tmpDir := t.TempDir()
+	s := New(buildTemplateFS())
+
+	result, err := s.Scaffold(context.Background(), ScaffoldOptions{
+		Name:        "..safe-name",
+		Description: "d",
+		OutputDir:   tmpDir,
+		Runtime:     "shell",
+		Auth:        "none",
+	})
+
+	require.NoError(t, err, "..foo names must not be falsely rejected as path traversals")
+	require.NotNil(t, result)
 }
 
 func firstLine(s string) string {

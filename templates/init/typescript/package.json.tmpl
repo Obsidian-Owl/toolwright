@@ -1,7 +1,7 @@
 {
-  "name": "{{.Name}}",
+  "name": "{{.Name | jsonEscape}}",
   "version": "0.1.0",
-  "description": "{{.Description}}",
+  "description": "{{.Description | jsonEscape}}",
   "dependencies": {
     "typescript": "^5.0.0"
   },

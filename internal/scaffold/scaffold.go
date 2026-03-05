@@ -3,6 +3,7 @@ package scaffold
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -66,6 +67,7 @@ func sharedEntries() []templateEntry {
 		{
 			tmplPath: "templates/init/hello.test.yaml.tmpl",
 			outPath:  "tests/hello.test.yaml",
+			static:   true,
 		},
 		{
 			tmplPath: "templates/init/README.md.tmpl",
@@ -144,6 +146,11 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts ScaffoldOptions) (*Scaff
 		return nil, fmt.Errorf("context cancelled: %w", err)
 	}
 
+	// Validate required fields.
+	if opts.Name == "" {
+		return nil, fmt.Errorf("project name must not be empty")
+	}
+
 	// Resolve output directory: use current directory when empty.
 	outputDir := opts.OutputDir
 	if outputDir == "" {
@@ -163,14 +170,26 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts ScaffoldOptions) (*Scaff
 	projectDir := filepath.Join(outputDir, opts.Name)
 
 	// Reject names that escape the output directory (path traversal defense).
-	rel, relErr := filepath.Rel(outputDir, projectDir)
-	if relErr != nil || strings.HasPrefix(rel, "..") {
+	// Use a Clean+prefix check rather than filepath.Rel so that names like
+	// "..foo" (safe) are accepted while "../../escape" (unsafe) are rejected.
+	if !strings.HasPrefix(
+		filepath.Clean(projectDir)+string(filepath.Separator),
+		filepath.Clean(outputDir)+string(filepath.Separator),
+	) {
 		return nil, fmt.Errorf("project name %q would escape output directory", opts.Name)
 	}
 
 	// Reject if the project directory already exists.
 	if _, err := os.Stat(projectDir); err == nil {
 		return nil, fmt.Errorf("directory %q already exists", projectDir)
+	}
+
+	// Validate runtime.
+	switch opts.Runtime {
+	case "shell", "go", "python", "typescript":
+		// valid
+	default:
+		return nil, fmt.Errorf("unknown runtime %q: must be one of shell, go, python, typescript", opts.Runtime)
 	}
 
 	// Collect all template entries for this runtime.
@@ -186,6 +205,23 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts ScaffoldOptions) (*Scaff
 	// Template function map.
 	funcMap := template.FuncMap{
 		"upper": strings.ToUpper,
+		// jsonEscape marshals s as a JSON string and strips the surrounding quotes,
+		// making it safe for interpolation inside JSON string literals.
+		"jsonEscape": func(s string) (string, error) {
+			b, err := json.Marshal(s)
+			if err != nil {
+				return "", err
+			}
+			return string(b[1 : len(b)-1]), nil
+		},
+		// yamlEscape escapes s for use inside a YAML double-quoted scalar:
+		// backslashes and double-quotes are escaped, newlines become \n.
+		"yamlEscape": func(s string) string {
+			s = strings.ReplaceAll(s, `\`, `\\`)
+			s = strings.ReplaceAll(s, `"`, `\"`)
+			s = strings.ReplaceAll(s, "\n", `\n`)
+			return s
+		},
 	}
 
 	// Render all templates to memory first (atomicity: render before writing).
@@ -226,22 +262,31 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts ScaffoldOptions) (*Scaff
 	}
 
 	// All templates rendered successfully. Now write files.
-	for _, rf := range rendered {
-		fullPath := filepath.Join(projectDir, rf.relPath)
+	// If any write fails, clean up the partially-created project directory
+	// so the caller can retry with the same name.
+	writeErr := func() error {
+		for _, rf := range rendered {
+			fullPath := filepath.Join(projectDir, rf.relPath)
 
-		// Ensure parent directory exists.
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-			return nil, fmt.Errorf("create directory for %q: %w", rf.relPath, err)
-		}
+			// Ensure parent directory exists.
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+				return fmt.Errorf("create directory for %q: %w", rf.relPath, err)
+			}
 
-		mode := os.FileMode(0644)
-		if rf.executable {
-			mode = 0755
-		}
+			mode := os.FileMode(0644)
+			if rf.executable {
+				mode = 0755
+			}
 
-		if err := os.WriteFile(fullPath, rf.content, mode); err != nil {
-			return nil, fmt.Errorf("write file %q: %w", rf.relPath, err)
+			if err := os.WriteFile(fullPath, rf.content, mode); err != nil {
+				return fmt.Errorf("write file %q: %w", rf.relPath, err)
+			}
 		}
+		return nil
+	}()
+	if writeErr != nil {
+		_ = os.RemoveAll(projectDir) // best-effort cleanup
+		return nil, writeErr
 	}
 
 	// Collect sorted relative file paths.

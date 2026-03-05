@@ -334,9 +334,9 @@ func TestIntegration_TemplateRendering_ProjectNameInContent(t *testing.T) {
 	// toolwright.yaml must contain the project name and description.
 	manifestContent, err := os.ReadFile(filepath.Join(projectDir, "toolwright.yaml"))
 	require.NoError(t, err)
-	assert.Contains(t, string(manifestContent), "name: "+projectName,
+	assert.Contains(t, string(manifestContent), `name: "`+projectName+`"`,
 		"manifest must contain rendered project name")
-	assert.Contains(t, string(manifestContent), "description: "+description,
+	assert.Contains(t, string(manifestContent), `description: "`+description+`"`,
 		"manifest must contain rendered description")
 
 	// README.md must contain the project name as a heading.
