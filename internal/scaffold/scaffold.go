@@ -215,11 +215,13 @@ func (s *Scaffolder) Scaffold(ctx context.Context, opts ScaffoldOptions) (*Scaff
 			return string(b[1 : len(b)-1]), nil
 		},
 		// yamlEscape escapes s for use inside a YAML double-quoted scalar:
-		// backslashes and double-quotes are escaped, newlines become \n.
+		// backslashes, double-quotes, and control characters are escaped.
 		"yamlEscape": func(s string) string {
 			s = strings.ReplaceAll(s, `\`, `\\`)
 			s = strings.ReplaceAll(s, `"`, `\"`)
 			s = strings.ReplaceAll(s, "\n", `\n`)
+			s = strings.ReplaceAll(s, "\r", `\r`)
+			s = strings.ReplaceAll(s, "\t", `\t`)
 			return s
 		},
 	}
