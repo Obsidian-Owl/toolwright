@@ -7,8 +7,8 @@
     "workDir": ".specwright/work/toolwright-completions/units/generate",
     "unitId": "generate",
     "tasksTotal": 6,
-    "tasksCompleted": [],
-    "currentTask": "task-1-provider-extract",
+    "tasksCompleted": ["task-1-provider-extract", "task-2-anthropic", "task-3-openai", "task-4-gemini", "task-5-generator", "task-6-cli"],
+    "currentTask": null,
     "intensity": "full"
   },
   "gates": {},
@@ -19,5 +19,5 @@
     { "id": "wiring", "description": "JSON Schema, exit codes, debug logging, wire.go production wiring, cleanup", "status": "planned", "order": 4, "workDir": ".specwright/work/toolwright-completions/units/wiring" }
   ],
   "lock": "sw-build",
-  "lastUpdated": "2026-03-06T02:00:00Z"
+  "lastUpdated": "2026-03-06T03:30:00Z"
 }

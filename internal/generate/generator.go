@@ -16,7 +16,8 @@ type Generator struct {
 }
 
 // NewGenerator creates a Generator with all 3 providers registered.
-// API keys are read from env vars at call time inside Complete().
+// API keys are read from environment variables at construction time and
+// passed to provider constructors. Ensure env vars are set before calling.
 func NewGenerator() *Generator {
 	providers := map[string]LLMProvider{
 		"anthropic": NewAnthropicProvider(os.Getenv("ANTHROPIC_API_KEY"), nil),
@@ -43,6 +44,13 @@ func (g *Generator) Generate(ctx context.Context, opts cli.ManifestGenerateOptio
 	provider, ok := g.providers[opts.Provider]
 	if !ok {
 		return nil, fmt.Errorf("generate: unknown provider %q", opts.Provider)
+	}
+
+	// NoMerge check: fail fast before any LLM call if the output file already exists.
+	if opts.NoMerge && opts.OutputPath != "" {
+		if _, err := os.Stat(opts.OutputPath); err == nil {
+			return nil, fmt.Errorf("generate: output file already exists: %s", opts.OutputPath)
+		}
 	}
 
 	model := opts.Model
@@ -84,12 +92,6 @@ func (g *Generator) Generate(ctx context.Context, opts cli.ManifestGenerateOptio
 
 	if lastErr != nil {
 		return nil, lastErr
-	}
-
-	if opts.NoMerge && opts.OutputPath != "" {
-		if _, err := os.Stat(opts.OutputPath); err == nil {
-			return nil, fmt.Errorf("generate: output file already exists: %s", opts.OutputPath)
-		}
 	}
 
 	return &cli.ManifestGenerateResult{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 const (
@@ -76,8 +77,11 @@ func (p *GeminiProvider) Complete(ctx context.Context, prompt, model string) (st
 		return "", fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", p.baseURL, model, p.apiKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	params := url.Values{}
+	params.Set("key", p.apiKey)
+	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent?%s",
+		p.baseURL, url.PathEscape(model), params.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("gemini: create request: %w", err)
 	}
