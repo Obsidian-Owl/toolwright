@@ -250,6 +250,30 @@ func TestGeminiProvider_Complete_HTTPError_NoKeyInError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AC-4: Transport-level errors must not leak the API key embedded in the URL.
+// This covers the *url.Error path where http.Client.Do itself fails (DNS, TLS,
+// context cancel) — distinct from HTTP errors where the server responds.
+// ---------------------------------------------------------------------------
+
+func TestGeminiProvider_Complete_TransportError_NoKeyInError(t *testing.T) {
+	secretKey := "AIza-gemini-transport-secret"
+	// Point at a server that immediately closes the connection to force a
+	// transport-level error (not an HTTP-level error).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Hijack and close so the client gets a transport error.
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	p := newGeminiProviderWithURL(secretKey, srv.Client(), srv.URL)
+	_, err := p.Complete(context.Background(), "test", "")
+	require.Error(t, err, "transport failure must return error")
+	assert.NotContains(t, err.Error(), secretKey,
+		"transport-level error must NEVER contain the API key (was leaking via *url.Error.URL)")
+}
+
+// ---------------------------------------------------------------------------
 // AC-9: HTTP errors surface status information.
 // ---------------------------------------------------------------------------
 

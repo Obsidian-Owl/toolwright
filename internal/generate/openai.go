@@ -84,7 +84,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, prompt, model string) (st
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("openai: send request: %w", err)
+		return "", fmt.Errorf("openai: send request: %w", sanitiseHTTPError("openai", err))
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body close error is not actionable
 

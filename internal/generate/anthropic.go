@@ -88,7 +88,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, prompt, model string) 
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("anthropic: send request: %w", err)
+		return "", fmt.Errorf("anthropic: send request: %w", sanitiseHTTPError("anthropic", err))
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body close error is not actionable
 
