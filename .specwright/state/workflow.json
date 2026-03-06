@@ -3,27 +3,21 @@
   "currentWork": {
     "id": "toolwright-completions",
     "description": "Implement remaining design vision: init scaffolding, TUI wizard, AI manifest generation, infrastructure wiring",
-    "status": "verifying",
-    "workDir": ".specwright/work/toolwright-completions/units/tui",
-    "unitId": "tui",
-    "tasksTotal": 2,
-    "tasksCompleted": ["task-1-tests", "task-2-wizard"],
-    "currentTask": null,
+    "status": "building",
+    "workDir": ".specwright/work/toolwright-completions/units/generate",
+    "unitId": "generate",
+    "tasksTotal": 6,
+    "tasksCompleted": [],
+    "currentTask": "task-1-provider-extract",
     "intensity": "full"
   },
-  "gates": {
-    "build":    { "status": "PASS", "timestamp": "2026-03-06T01:15:00Z", "findings": 0 },
-    "tests":    { "status": "PASS", "timestamp": "2026-03-06T01:15:00Z", "findings": 0 },
-    "security": { "status": "PASS", "timestamp": "2026-03-06T01:15:00Z", "findings": 0, "info": 6 },
-    "wiring":   { "status": "PASS", "timestamp": "2026-03-06T01:15:00Z", "findings": 1, "warn": 1, "info": 5 },
-    "spec":     { "status": "PASS", "timestamp": "2026-03-06T01:15:00Z", "findings": 2, "warn": 1, "info": 1, "acTotal": 7, "acPassed": 7 }
-  },
+  "gates": {},
   "workUnits": [
     { "id": "scaffold", "description": "Template files, scaffold package, embed.go for templates", "status": "shipped", "order": 1, "workDir": ".specwright/work/toolwright-completions/units/scaffold" },
-    { "id": "tui", "description": "Bubble Tea wizard package using huh", "status": "building", "order": 2, "workDir": ".specwright/work/toolwright-completions/units/tui" },
-    { "id": "generate", "description": "AI manifest generator with 3 LLM providers, CLI flag additions", "status": "planned", "order": 3, "workDir": ".specwright/work/toolwright-completions/units/generate" },
+    { "id": "tui", "description": "Bubble Tea wizard package using huh", "status": "shipped", "order": 2, "workDir": ".specwright/work/toolwright-completions/units/tui" },
+    { "id": "generate", "description": "AI manifest generator with 3 LLM providers, CLI flag additions", "status": "building", "order": 3, "workDir": ".specwright/work/toolwright-completions/units/generate" },
     { "id": "wiring", "description": "JSON Schema, exit codes, debug logging, wire.go production wiring, cleanup", "status": "planned", "order": 4, "workDir": ".specwright/work/toolwright-completions/units/wiring" }
   ],
-  "lock": "sw-verify",
-  "lastUpdated": "2026-03-06T01:20:00Z"
+  "lock": "sw-build",
+  "lastUpdated": "2026-03-06T02:00:00Z"
 }
