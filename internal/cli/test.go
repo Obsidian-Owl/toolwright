@@ -71,6 +71,8 @@ func runTests(cmd *cobra.Command, cfg *testConfig) error {
 		return err
 	}
 
+	debugLog(cmd, "parsing test directory: %s", testsDir)
+
 	// Parse test suites.
 	suites, err := cfg.Parser.ParseDir(testsDir)
 	if err != nil {
@@ -81,6 +83,7 @@ func runTests(cmd *cobra.Command, cfg *testConfig) error {
 		}
 		return err
 	}
+	debugLog(cmd, "found %d test suites", len(suites))
 
 	// Apply filter if set.
 	if filter != "" {
@@ -107,6 +110,7 @@ func runTests(cmd *cobra.Command, cfg *testConfig) error {
 	anyFailed := false
 
 	for _, suite := range suites {
+		debugLog(cmd, "running suite: %s", suite.Tool)
 		var report *tooltest.TestReport
 		var runErr error
 

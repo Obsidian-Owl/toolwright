@@ -67,6 +67,7 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 		}
 		return err
 	}
+	debugLog(cmd, "loading manifest from %s", manifestPath)
 
 	// Find tool by name.
 	toolIdx := -1
@@ -88,6 +89,7 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 
 	// Resolve effective auth for this tool.
 	resolvedAuth := tk.ResolvedAuth(tool)
+	debugLog(cmd, "auth type for %s: %s", toolName, resolvedAuth.Type)
 
 	// Validate auth type.
 	switch resolvedAuth.Type {
@@ -127,6 +129,8 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 		ToolName:    toolName,
 		OpenBrowser: openBrowserFn,
 	}
+
+	debugLog(cmd, "starting OAuth flow")
 
 	// Delegate to the injected login function.
 	_, loginErr := cfg.Login(cmd.Context(), loginCfg)

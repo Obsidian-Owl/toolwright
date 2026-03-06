@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -435,36 +436,50 @@ func TestCI_ImpliesColorDisabled(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-5: debugLog writes to stderr writer, not stdout writer
+// AC-5: debugLog writes to cmd's stderr when --debug is set
 // ---------------------------------------------------------------------------
 
-func TestDebugLog_WritesToStderr(t *testing.T) {
-	stderr := &bytes.Buffer{}
-	debugLog(stderr, "test diagnostic message")
+// newDebugCmd returns a cobra.Command with --debug flag enabled
+// and its stderr wired to errBuf, for use in debugLog unit tests.
+func newDebugCmd(errBuf *bytes.Buffer) *cobra.Command {
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().Bool("debug", false, "enable debug output")
+	cmd.SetErr(errBuf)
+	_ = cmd.Flags().Set("debug", "true")
+	return cmd
+}
 
-	output := stderr.String()
+func TestDebugLog_WritesToStderr(t *testing.T) {
+	errBuf := &bytes.Buffer{}
+	cmd := newDebugCmd(errBuf)
+
+	debugLog(cmd, "test diagnostic message")
+
+	output := errBuf.String()
 	assert.Contains(t, output, "test diagnostic message",
-		"debugLog must write the message to the provided writer")
+		"debugLog must write the message to cmd's stderr")
 }
 
 func TestDebugLog_DoesNotWriteToStdout(t *testing.T) {
-	// debugLog takes a writer for stderr. It should ONLY write to that writer.
-	// This test verifies the function signature does what it says.
-	stderr := &bytes.Buffer{}
-	debugLog(stderr, "diagnostic")
+	// debugLog must only write to cmd.ErrOrStderr(), never to stdout.
+	errBuf := &bytes.Buffer{}
+	cmd := newDebugCmd(errBuf)
 
-	assert.NotEmpty(t, stderr.String(),
+	debugLog(cmd, "diagnostic")
+
+	assert.NotEmpty(t, errBuf.String(),
 		"debugLog must write something to the stderr writer")
 }
 
 func TestDebugLog_IncludesTimestamp(t *testing.T) {
-	// AC-5 specifies "timestamped lines on stderr"
-	stderr := &bytes.Buffer{}
-	debugLog(stderr, "test message")
+	// AC-5 specifies "timestamped lines on stderr" in RFC3339 format.
+	errBuf := &bytes.Buffer{}
+	cmd := newDebugCmd(errBuf)
 
-	output := stderr.String()
-	// A timestamp should contain at least a colon (HH:MM:SS) or digits
-	// We check for a basic timestamp-like pattern
+	debugLog(cmd, "test message")
+
+	output := errBuf.String()
+	// RFC3339 timestamp contains digits separated by colons and dashes.
 	assert.Regexp(t, `\d{2}:\d{2}`, output,
 		"debugLog output must include a timestamp")
 }
@@ -477,38 +492,41 @@ func TestDebugLog_MessagePreserved(t *testing.T) {
 		{name: "simple", message: "parsing manifest"},
 		{name: "with path", message: "loading /home/user/toolwright.yaml"},
 		{name: "with special chars", message: `resolved auth for "add-pet"`},
-		{name: "empty message", message: ""},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			stderr := &bytes.Buffer{}
-			debugLog(stderr, tc.message)
+			errBuf := &bytes.Buffer{}
+			cmd := newDebugCmd(errBuf)
 
-			if tc.message != "" {
-				assert.Contains(t, stderr.String(), tc.message,
-					"debugLog must include the original message in output")
-			}
+			debugLog(cmd, "%s", tc.message)
+
+			assert.Contains(t, errBuf.String(), tc.message,
+				"debugLog must include the original message in output")
 		})
 	}
 }
 
 func TestDebugLog_EndsWithNewline(t *testing.T) {
-	stderr := &bytes.Buffer{}
-	debugLog(stderr, "line one")
+	errBuf := &bytes.Buffer{}
+	cmd := newDebugCmd(errBuf)
 
-	output := stderr.String()
+	debugLog(cmd, "line one")
+
+	output := errBuf.String()
 	assert.True(t, strings.HasSuffix(output, "\n"),
 		"debugLog output must end with a newline for readable stderr")
 }
 
 func TestDebugLog_MultipleCallsProduceMultipleLines(t *testing.T) {
-	stderr := &bytes.Buffer{}
-	debugLog(stderr, "first")
-	debugLog(stderr, "second")
-	debugLog(stderr, "third")
+	errBuf := &bytes.Buffer{}
+	cmd := newDebugCmd(errBuf)
 
-	output := stderr.String()
+	debugLog(cmd, "first")
+	debugLog(cmd, "second")
+	debugLog(cmd, "third")
+
+	output := errBuf.String()
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	require.Len(t, lines, 3,
 		"three debugLog calls must produce exactly three lines")
@@ -516,6 +534,20 @@ func TestDebugLog_MultipleCallsProduceMultipleLines(t *testing.T) {
 	assert.Contains(t, lines[0], "first")
 	assert.Contains(t, lines[1], "second")
 	assert.Contains(t, lines[2], "third")
+}
+
+func TestDebugLog_NoOutputWhenDebugFalse(t *testing.T) {
+	// debugLog must be a no-op when --debug is not set.
+	errBuf := &bytes.Buffer{}
+	cmd := &cobra.Command{Use: "test"}
+	cmd.Flags().Bool("debug", false, "enable debug output")
+	cmd.SetErr(errBuf)
+	// Do NOT set --debug to true.
+
+	debugLog(cmd, "should not appear")
+
+	assert.Empty(t, errBuf.String(),
+		"debugLog must produce no output when --debug is false")
 }
 
 // ---------------------------------------------------------------------------

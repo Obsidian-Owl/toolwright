@@ -60,7 +60,12 @@ func newRunCmd(cfg *runConfig) *cobra.Command {
 // remainder into tool name + tool args.
 func runTool(cmd *cobra.Command, args []string, cfg *runConfig) error {
 	// Extract known flags from the raw arg list.
-	jsonMode, manifestPath, tokenFlag, remaining := extractRunFlags(args)
+	jsonMode, debugMode, manifestPath, tokenFlag, remaining := extractRunFlags(args)
+
+	// Propagate --debug into the persistent flag so debugLog can read it.
+	if debugMode {
+		_ = cmd.Flags().Set("debug", "true")
+	}
 
 	// Require at least one arg: the tool name.
 	if len(remaining) == 0 {
@@ -80,6 +85,7 @@ func runTool(cmd *cobra.Command, args []string, cfg *runConfig) error {
 		}
 		return err
 	}
+	debugLog(cmd, "loading manifest from %s", manifestPath)
 
 	// Find the tool by name.
 	var tool manifest.Tool
@@ -115,15 +121,19 @@ func runTool(cmd *cobra.Command, args []string, cfg *runConfig) error {
 		}
 		token = resolved
 	}
+	debugLog(cmd, "resolving auth for tool %s (type: %s)", toolName, auth.Type)
 
 	// Split remaining tool args into positional args and flags for the tool.
 	positional, flagMap := splitToolArgs(toolArgs)
 
 	// Execute the tool.
+	debugLog(cmd, "executing: %s", tool.Entrypoint)
 	result, runErr := cfg.Runner.Run(cmd.Context(), tool, positional, flagMap, token)
 	if runErr != nil {
 		return runErr
 	}
+
+	debugLog(cmd, "tool exited with code %d", result.ExitCode)
 
 	// Forward tool stdout and stderr.
 	if len(result.Stdout) > 0 {
@@ -142,9 +152,9 @@ func runTool(cmd *cobra.Command, args []string, cfg *runConfig) error {
 }
 
 // extractRunFlags scans raw args and pulls out the flags the run command owns
-// (--manifest/-m, --token, --json). It returns the extracted values and the
-// remaining args with those flags and their values removed.
-func extractRunFlags(args []string) (jsonMode bool, manifestPath, tokenFlagValue string, remaining []string) {
+// (--manifest/-m, --token, --json, --debug). It returns the extracted values
+// and the remaining args with those flags and their values removed.
+func extractRunFlags(args []string) (jsonMode bool, debugMode bool, manifestPath, tokenFlagValue string, remaining []string) {
 	manifestPath = "toolwright.yaml" // default
 
 	for i := 0; i < len(args); i++ {
@@ -152,6 +162,8 @@ func extractRunFlags(args []string) (jsonMode bool, manifestPath, tokenFlagValue
 		switch {
 		case arg == "--json", strings.HasPrefix(arg, "--json="):
 			jsonMode = true
+		case arg == "--debug", strings.HasPrefix(arg, "--debug="):
+			debugMode = true
 		case arg == "--manifest" || arg == "-m":
 			if i+1 < len(args) {
 				i++
@@ -171,7 +183,7 @@ func extractRunFlags(args []string) (jsonMode bool, manifestPath, tokenFlagValue
 		}
 	}
 
-	return jsonMode, manifestPath, tokenFlagValue, remaining
+	return jsonMode, debugMode, manifestPath, tokenFlagValue, remaining
 }
 
 // splitToolArgs splits a slice of raw args (after the tool name) into
