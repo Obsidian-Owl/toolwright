@@ -84,18 +84,19 @@ func (p *OpenAIProvider) Complete(ctx context.Context, prompt, model string) (st
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("openai: send request: %w", sanitiseHTTPError("openai", err))
+		return "", fmt.Errorf("openai: send request: %w", sanitiseHTTPError(err))
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body close error is not actionable
+
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // drain for connection reuse
+		return "", fmt.Errorf("openai: unexpected status %d", resp.StatusCode)
+	}
 
 	limited := io.LimitReader(resp.Body, openAIBodyLimit)
 	respBytes, err := io.ReadAll(limited)
 	if err != nil {
 		return "", fmt.Errorf("openai: read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai: unexpected status %d", resp.StatusCode)
 	}
 
 	var parsed openAIResponse

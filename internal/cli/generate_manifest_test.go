@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -436,7 +438,8 @@ func TestGenerateManifest_NoDryRun_DefaultFalse(t *testing.T) {
 	}
 	cfg := &manifestGenerateConfig{Generator: mock}
 
-	_, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic")
+	out := filepath.Join(t.TempDir(), "toolwright.yaml")
+	_, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic", "--output", out)
 	require.NoError(t, err)
 	require.True(t, mock.called)
 	assert.False(t, mock.calledWith.DryRun,
@@ -496,10 +499,11 @@ func TestGenerateManifest_CustomOutputPath(t *testing.T) {
 	}
 	cfg := &manifestGenerateConfig{Generator: mock}
 
-	_, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic", "--output", "my-manifest.yaml")
+	out := filepath.Join(t.TempDir(), "my-manifest.yaml")
+	_, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic", "--output", out)
 	require.NoError(t, err)
 	require.True(t, mock.called)
-	assert.Equal(t, "my-manifest.yaml", mock.calledWith.OutputPath,
+	assert.Equal(t, out, mock.calledWith.OutputPath,
 		"--output value must be passed as OutputPath to generator")
 }
 
@@ -677,7 +681,8 @@ func TestGenerateManifest_HumanOutput_MentionsProvider(t *testing.T) {
 	}
 	cfg := &manifestGenerateConfig{Generator: mock}
 
-	stdout, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic")
+	out := filepath.Join(t.TempDir(), "toolwright.yaml")
+	stdout, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic", "--output", out)
 	require.NoError(t, err)
 	assert.Contains(t, strings.ToLower(stdout), "anthropic",
 		"human output must mention the provider used")
@@ -692,7 +697,8 @@ func TestGenerateManifest_HumanOutput_MentionsOutputPath(t *testing.T) {
 	}
 	cfg := &manifestGenerateConfig{Generator: mock}
 
-	stdout, err := executeGenerateManifestCmd(cfg, "--provider", "openai", "--output", "custom.yaml")
+	out := filepath.Join(t.TempDir(), "custom.yaml")
+	stdout, err := executeGenerateManifestCmd(cfg, "--provider", "openai", "--output", out)
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "custom.yaml",
 		"human output must mention the output file path")
@@ -725,7 +731,8 @@ func TestGenerateManifest_HumanOutput_DifferentProviders_DifferentOutput(t *test
 			},
 		}
 		cfg := &manifestGenerateConfig{Generator: mock}
-		stdout, err := executeGenerateManifestCmd(cfg, "--provider", provider)
+		out := filepath.Join(t.TempDir(), "out.yaml")
+		stdout, err := executeGenerateManifestCmd(cfg, "--provider", provider, "--output", out)
 		require.NoError(t, err)
 		outputs[provider] = stdout
 	}
@@ -870,7 +877,8 @@ func TestGenerateManifest_NonJSONMode_NoJSONInOutput(t *testing.T) {
 	}
 	cfg := &manifestGenerateConfig{Generator: mock}
 
-	stdout, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic")
+	out := filepath.Join(t.TempDir(), "toolwright.yaml")
+	stdout, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic", "--output", out)
 	require.NoError(t, err)
 
 	// Non-JSON mode should not produce JSON output.
@@ -879,6 +887,40 @@ func TestGenerateManifest_NonJSONMode_NoJSONInOutput(t *testing.T) {
 		assert.False(t, json.Valid([]byte(trimmed)) && strings.HasPrefix(trimmed, "{"),
 			"non-JSON mode must not produce JSON-formatted output; got: %s", trimmed)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// File write — non-dry-run path
+// ---------------------------------------------------------------------------
+
+func TestGenerateManifest_NonDryRun_WritesFileToPath(t *testing.T) {
+	expectedYAML := "apiVersion: toolwright/v1\nkind: Toolkit\nmetadata:\n  name: written\n"
+	mock := &mockManifestGenerator{
+		result: &ManifestGenerateResult{
+			Manifest: expectedYAML,
+			Provider: "anthropic",
+		},
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	out := filepath.Join(t.TempDir(), "out.yaml")
+	_, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic", "--output", out)
+	require.NoError(t, err, "non-dry-run must succeed when output path is writable")
+
+	written, err := os.ReadFile(out)
+	require.NoError(t, err, "manifest file must exist after non-dry-run generation")
+	assert.Equal(t, expectedYAML, string(written),
+		"file content must exactly match the manifest returned by the generator")
+}
+
+func TestGenerateManifest_NonDryRun_WriteError_Propagated(t *testing.T) {
+	mock := &mockManifestGenerator{result: defaultManifestResult()}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	// Point output at a path whose parent dir does not exist.
+	out := filepath.Join(t.TempDir(), "nonexistent", "out.yaml")
+	_, err := executeGenerateManifestCmd(cfg, "--provider", "anthropic", "--output", out)
+	require.Error(t, err, "write failure must propagate as an error")
 }
 
 // ---------------------------------------------------------------------------

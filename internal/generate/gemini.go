@@ -83,25 +83,26 @@ func (p *GeminiProvider) Complete(ctx context.Context, prompt, model string) (st
 		p.baseURL, url.PathEscape(model), params.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("gemini: create request: %w", err)
+		return "", fmt.Errorf("gemini: create request: %w", sanitiseHTTPError(err))
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("gemini: send request: %w", sanitiseHTTPError("gemini", err))
+		return "", fmt.Errorf("gemini: send request: %w", sanitiseHTTPError(err))
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body close error is not actionable
+
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // drain for connection reuse
+		return "", fmt.Errorf("gemini: unexpected status %d", resp.StatusCode)
+	}
 
 	limited := io.LimitReader(resp.Body, geminiBodyLimit)
 	respBytes, err := io.ReadAll(limited)
 	if err != nil {
 		return "", fmt.Errorf("gemini: read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gemini: unexpected status %d", resp.StatusCode)
 	}
 
 	var parsed geminiResponse

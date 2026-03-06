@@ -20,22 +20,21 @@ type LLMProvider interface {
 // request URL, which for Gemini contains the API key as a query parameter.
 // This helper extracts only the operation name and root cause, discarding the
 // URL so the key never appears in error output.
-func sanitiseHTTPError(provider string, err error) error {
+func sanitiseHTTPError(err error) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return &sanitisedHTTPError{provider: provider, op: urlErr.Op, cause: urlErr.Err}
+		return &sanitisedHTTPError{op: urlErr.Op, cause: urlErr.Err}
 	}
 	return err
 }
 
 type sanitisedHTTPError struct {
-	provider string
-	op       string
-	cause    error
+	op    string
+	cause error
 }
 
 func (e *sanitisedHTTPError) Error() string {
-	return e.provider + ": " + e.op + ": " + e.cause.Error()
+	return e.op + ": " + e.cause.Error()
 }
 
 func (e *sanitisedHTTPError) Unwrap() error {

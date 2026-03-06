@@ -32,9 +32,13 @@ func NewGeneratorWithProviders(providers map[string]LLMProvider) *Generator {
 	return &Generator{providers: providers}
 }
 
-// Providers returns the registered provider map (used in tests).
+// Providers returns a copy of the registered provider map (used in tests).
 func (g *Generator) Providers() map[string]LLMProvider {
-	return g.providers
+	out := make(map[string]LLMProvider, len(g.providers))
+	for k, v := range g.providers {
+		out[k] = v
+	}
+	return out
 }
 
 // Generate produces a toolwright manifest from the given options.
@@ -66,6 +70,10 @@ func (g *Generator) Generate(ctx context.Context, opts cli.ManifestGenerateOptio
 	)
 
 	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 && ctx.Err() != nil {
+			lastErr = ctx.Err()
+			break
+		}
 		raw, err := provider.Complete(ctx, prompt, model)
 		if err != nil {
 			lastErr = fmt.Errorf("generate: provider call failed: %w", err)

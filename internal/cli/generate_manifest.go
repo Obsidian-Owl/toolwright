@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -14,13 +15,10 @@ type ManifestGenerator interface {
 	Generate(ctx context.Context, opts ManifestGenerateOptions) (*ManifestGenerateResult, error)
 }
 
-// manifestGenerator is kept as an alias for internal wiring.
-type manifestGenerator = ManifestGenerator
-
 // manifestGenerateConfig holds injectable dependencies for the
 // generate manifest subcommand.
 type manifestGenerateConfig struct {
-	Generator manifestGenerator
+	Generator ManifestGenerator
 }
 
 // ManifestGenerateOptions describes what the manifest generator should produce.
@@ -138,6 +136,9 @@ func outputManifestResult(cmd *cobra.Command, jsonMode, dryRun bool, outputPath 
 		return nil
 	}
 
+	if err := os.WriteFile(outputPath, []byte(result.Manifest), 0644); err != nil { //nolint:gosec // 0644 is correct for a user-facing manifest file
+		return fmt.Errorf("write manifest: %w", err)
+	}
 	fmt.Fprintf(w, "Manifest generated using %s and written to %s\n", result.Provider, outputPath)
 	return nil
 }

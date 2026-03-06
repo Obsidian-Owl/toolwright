@@ -88,18 +88,19 @@ func (p *AnthropicProvider) Complete(ctx context.Context, prompt, model string) 
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("anthropic: send request: %w", sanitiseHTTPError("anthropic", err))
+		return "", fmt.Errorf("anthropic: send request: %w", sanitiseHTTPError(err))
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body close error is not actionable
+
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // drain for connection reuse
+		return "", fmt.Errorf("anthropic: unexpected status %d", resp.StatusCode)
+	}
 
 	limited := io.LimitReader(resp.Body, anthropicBodyLimit)
 	respBytes, err := io.ReadAll(limited)
 	if err != nil {
 		return "", fmt.Errorf("anthropic: read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("anthropic: unexpected status %d", resp.StatusCode)
 	}
 
 	var parsed anthropicResponse
