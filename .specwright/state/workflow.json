@@ -3,7 +3,7 @@
   "currentWork": {
     "id": "toolwright-completions",
     "description": "Implement remaining design vision: init scaffolding, TUI wizard, AI manifest generation, infrastructure wiring",
-    "status": "building",
+    "status": "verifying",
     "workDir": ".specwright/work/toolwright-completions/units/generate",
     "unitId": "generate",
     "tasksTotal": 6,
@@ -11,13 +11,19 @@
     "currentTask": null,
     "intensity": "full"
   },
-  "gates": {},
+  "gates": {
+    "gate-build":    { "status": "PASS", "findings": { "block": 0, "warn": 0, "info": 0 }, "timestamp": "2026-03-06T04:15:32Z" },
+    "gate-tests":    { "status": "PASS", "findings": { "block": 0, "warn": 0, "info": 0 }, "timestamp": "2026-03-06T04:15:32Z" },
+    "gate-security": { "status": "PASS", "findings": { "block": 0, "warn": 0, "info": 0 }, "timestamp": "2026-03-06T04:20:00Z" },
+    "gate-wiring":   { "status": "PASS", "findings": { "block": 0, "warn": 0, "info": 1 }, "timestamp": "2026-03-06T04:15:32Z" },
+    "gate-spec":     { "status": "PASS", "findings": { "block": 0, "warn": 0, "info": 0 }, "timestamp": "2026-03-06T04:15:32Z" }
+  },
   "workUnits": [
     { "id": "scaffold", "description": "Template files, scaffold package, embed.go for templates", "status": "shipped", "order": 1, "workDir": ".specwright/work/toolwright-completions/units/scaffold" },
     { "id": "tui", "description": "Bubble Tea wizard package using huh", "status": "shipped", "order": 2, "workDir": ".specwright/work/toolwright-completions/units/tui" },
     { "id": "generate", "description": "AI manifest generator with 3 LLM providers, CLI flag additions", "status": "building", "order": 3, "workDir": ".specwright/work/toolwright-completions/units/generate" },
     { "id": "wiring", "description": "JSON Schema, exit codes, debug logging, wire.go production wiring, cleanup", "status": "planned", "order": 4, "workDir": ".specwright/work/toolwright-completions/units/wiring" }
   ],
-  "lock": "sw-build",
-  "lastUpdated": "2026-03-06T03:30:00Z"
+  "lock": null,
+  "lastUpdated": "2026-03-06T04:15:32Z"
 }
