@@ -41,7 +41,7 @@ tools:
 {{- if eq .Auth "token"}}
 auth:
   type: token
-  token_env: {{.Name | upper}}_TOKEN
+  token_env: "{{.Name | upper | yamlEscape}}_TOKEN"
   token_flag: --token
 {{- else if eq .Auth "oauth2"}}
 auth:
@@ -772,6 +772,23 @@ func TestScaffold_Manifest_AuthOAuth2_HasOAuthFields(t *testing.T) {
 		"oauth2 auth must have client_id field")
 	assert.NotEmpty(t, tk.Auth.Scopes,
 		"oauth2 auth must have scopes field")
+}
+
+func TestScaffold_TokenEnv_EscapesSpecialCharsInName(t *testing.T) {
+	// Regression: a project name containing a double-quote previously broke
+	// the YAML scalar for token_env, producing a parse error. The yamlEscape
+	// helper must make the value safe even for adversarial names.
+	_, projectDir := scaffoldInTempDir(t, ScaffoldOptions{
+		Name: `evil"inject`, Description: "d", Runtime: "shell", Auth: "token",
+	})
+
+	content := readProjectFile(t, projectDir, "toolwright.yaml")
+	tk, err := manifest.Parse(strings.NewReader(content))
+	require.NoError(t, err, "YAML must remain valid for names with special characters")
+	require.NotNil(t, tk.Auth)
+	// YAML parser unescapes \" back to " in the parsed value.
+	assert.Equal(t, `EVIL"INJECT_TOKEN`, tk.Auth.TokenEnv,
+		"token_env must contain the uppercased name with special chars intact")
 }
 
 func TestScaffold_Manifest_AuthVariants_StillPassValidation(t *testing.T) {

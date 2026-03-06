@@ -3,7 +3,7 @@
   "currentWork": {
     "id": "toolwright-completions",
     "description": "Implement remaining design vision: init scaffolding, TUI wizard, AI manifest generation, infrastructure wiring",
-    "status": "shipped",
+    "status": "building",
     "workDir": ".specwright/work/toolwright-completions/units/tui",
     "unitId": "tui",
     "tasksTotal": null,
@@ -19,5 +19,5 @@
     { "id": "wiring", "description": "JSON Schema, exit codes, debug logging, wire.go production wiring, cleanup", "status": "planned", "order": 4, "workDir": ".specwright/work/toolwright-completions/units/wiring" }
   ],
   "lock": null,
-  "lastUpdated": "2026-03-05T12:00:00Z"
+  "lastUpdated": "2026-03-06T00:00:00Z"
 }
