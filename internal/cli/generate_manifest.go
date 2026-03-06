@@ -61,6 +61,8 @@ func newGenerateManifestCmd(cfg *manifestGenerateConfig) *cobra.Command {
 	cmd.Flags().StringP("description", "d", "", "description of what the toolkit should do")
 	cmd.Flags().StringP("output", "o", "toolwright.yaml", "output file path for the generated manifest")
 	cmd.Flags().Bool("dry-run", false, "print manifest to stdout instead of writing to file")
+	cmd.Flags().StringP("model", "m", "", "override provider default model")
+	cmd.Flags().Bool("no-merge", false, "fail if output file already exists")
 	return cmd
 }
 
@@ -78,12 +80,16 @@ func runGenerateManifest(cmd *cobra.Command, cfg *manifestGenerateConfig) error 
 	description, _ := cmd.Flags().GetString("description")
 	outputPath, _ := cmd.Flags().GetString("output")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	model, _ := cmd.Flags().GetString("model")
+	noMerge, _ := cmd.Flags().GetBool("no-merge")
 
 	opts := ManifestGenerateOptions{
 		Provider:    provider,
 		Description: description,
 		OutputPath:  outputPath,
 		DryRun:      dryRun,
+		Model:       model,
+		NoMerge:     noMerge,
 	}
 
 	if cfg.Generator == nil {

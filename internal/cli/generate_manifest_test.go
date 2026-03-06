@@ -893,3 +893,226 @@ func mapKeysFromAny(m map[string]any) []string {
 	}
 	return keys
 }
+
+// ---------------------------------------------------------------------------
+// --model flag tests (Task 6)
+// ---------------------------------------------------------------------------
+
+func TestGenerateManifest_ModelFlag_PassedToGenerator(t *testing.T) {
+	mock := &mockManifestGenerator{
+		result: defaultManifestResult(),
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	_, err := executeGenerateManifestCmd(cfg,
+		"--provider", "anthropic",
+		"--model", "claude-opus-4",
+		"--dry-run",
+	)
+	require.NoError(t, err,
+		"--model flag must be accepted without error")
+	require.True(t, mock.called,
+		"generator must be called when --model is provided")
+	assert.Equal(t, "claude-opus-4", mock.calledWith.Model,
+		"--model value must be passed through to ManifestGenerateOptions.Model")
+}
+
+func TestGenerateManifest_ModelFlag_DefaultEmpty(t *testing.T) {
+	mock := &mockManifestGenerator{
+		result: defaultManifestResult(),
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	_, err := executeGenerateManifestCmd(cfg,
+		"--provider", "anthropic",
+		"--dry-run",
+	)
+	require.NoError(t, err,
+		"command must succeed without --model flag")
+	require.True(t, mock.called,
+		"generator must be called when --model is omitted")
+	assert.Equal(t, "", mock.calledWith.Model,
+		"Model must default to empty string when --model is not specified")
+}
+
+func TestGenerateManifest_ModelFlag_DifferentValues(t *testing.T) {
+	// Anti-hardcoding: different --model values must produce different Model
+	// in the options struct.
+	tests := []struct {
+		model string
+	}{
+		{model: "claude-opus-4"},
+		{model: "gpt-4o"},
+		{model: "gemini-2.0-flash"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			mock := &mockManifestGenerator{
+				result: defaultManifestResult(),
+			}
+			cfg := &manifestGenerateConfig{Generator: mock}
+
+			_, err := executeGenerateManifestCmd(cfg,
+				"--provider", "anthropic",
+				"--model", tc.model,
+				"--dry-run",
+			)
+			require.NoError(t, err)
+			require.True(t, mock.called)
+			assert.Equal(t, tc.model, mock.calledWith.Model,
+				"--model %q must be passed through exactly", tc.model)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// --model flag — command structure
+// ---------------------------------------------------------------------------
+
+func TestGenerateManifestCmd_HasModelFlag(t *testing.T) {
+	cfg := &manifestGenerateConfig{}
+	cmd := newGenerateManifestCmd(cfg)
+	f := cmd.Flags().Lookup("model")
+	require.NotNil(t, f, "generate manifest must have a --model flag")
+	assert.Equal(t, "", f.DefValue,
+		"--model default must be empty string (use provider default)")
+}
+
+func TestGenerateManifestCmd_ModelShortFlag(t *testing.T) {
+	cfg := &manifestGenerateConfig{}
+	cmd := newGenerateManifestCmd(cfg)
+	f := cmd.Flags().ShorthandLookup("m")
+	require.NotNil(t, f, "--model must have -m short form")
+	assert.Equal(t, "model", f.Name,
+		"-m shorthand must map to --model, not another flag")
+}
+
+// ---------------------------------------------------------------------------
+// --no-merge flag tests (Task 6)
+// ---------------------------------------------------------------------------
+
+func TestGenerateManifest_NoMergeFlag_PassedToGenerator(t *testing.T) {
+	mock := &mockManifestGenerator{
+		result: defaultManifestResult(),
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	_, err := executeGenerateManifestCmd(cfg,
+		"--provider", "anthropic",
+		"--no-merge",
+		"--dry-run",
+	)
+	require.NoError(t, err,
+		"--no-merge flag must be accepted without error")
+	require.True(t, mock.called,
+		"generator must be called when --no-merge is provided")
+	assert.True(t, mock.calledWith.NoMerge,
+		"--no-merge must set NoMerge=true in ManifestGenerateOptions")
+}
+
+func TestGenerateManifest_NoMergeFlag_DefaultFalse(t *testing.T) {
+	mock := &mockManifestGenerator{
+		result: defaultManifestResult(),
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	_, err := executeGenerateManifestCmd(cfg,
+		"--provider", "anthropic",
+		"--dry-run",
+	)
+	require.NoError(t, err,
+		"command must succeed without --no-merge flag")
+	require.True(t, mock.called,
+		"generator must be called when --no-merge is omitted")
+	assert.False(t, mock.calledWith.NoMerge,
+		"NoMerge must default to false when --no-merge is not specified")
+}
+
+// ---------------------------------------------------------------------------
+// --no-merge flag — command structure
+// ---------------------------------------------------------------------------
+
+func TestGenerateManifestCmd_HasNoMergeFlag(t *testing.T) {
+	cfg := &manifestGenerateConfig{}
+	cmd := newGenerateManifestCmd(cfg)
+	f := cmd.Flags().Lookup("no-merge")
+	require.NotNil(t, f, "generate manifest must have a --no-merge flag")
+	assert.Equal(t, "false", f.DefValue,
+		"--no-merge default must be false")
+}
+
+// ---------------------------------------------------------------------------
+// Both flags together (Task 6)
+// ---------------------------------------------------------------------------
+
+func TestGenerateManifest_ModelAndNoMerge_Together(t *testing.T) {
+	mock := &mockManifestGenerator{
+		result: defaultManifestResult(),
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	_, err := executeGenerateManifestCmd(cfg,
+		"--provider", "anthropic",
+		"--model", "claude-opus-4",
+		"--no-merge",
+		"--dry-run",
+	)
+	require.NoError(t, err,
+		"command must accept --model and --no-merge together")
+	require.True(t, mock.called,
+		"generator must be called when both flags are provided")
+	assert.Equal(t, "claude-opus-4", mock.calledWith.Model,
+		"Model must be 'claude-opus-4' when both flags are set")
+	assert.True(t, mock.calledWith.NoMerge,
+		"NoMerge must be true when both flags are set")
+	// Verify other fields are still wired correctly alongside the new flags.
+	assert.Equal(t, "anthropic", mock.calledWith.Provider,
+		"Provider must still be passed correctly when new flags are present")
+	assert.True(t, mock.calledWith.DryRun,
+		"DryRun must still be passed correctly when new flags are present")
+}
+
+func TestGenerateManifest_ModelShortForm(t *testing.T) {
+	mock := &mockManifestGenerator{
+		result: defaultManifestResult(),
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	_, err := executeGenerateManifestCmd(cfg,
+		"-p", "anthropic",
+		"-m", "gpt-4o",
+		"--dry-run",
+	)
+	require.NoError(t, err)
+	require.True(t, mock.called)
+	assert.Equal(t, "gpt-4o", mock.calledWith.Model,
+		"-m shorthand must correctly set the model")
+}
+
+func TestGenerateManifest_AllFlagsIncludingNewOnes(t *testing.T) {
+	// Comprehensive passthrough test: every option field must be wired.
+	mock := &mockManifestGenerator{
+		result: defaultManifestResult(),
+	}
+	cfg := &manifestGenerateConfig{Generator: mock}
+
+	_, err := executeGenerateManifestCmd(cfg,
+		"--provider", "openai",
+		"--description", "Full flag test",
+		"--output", "full.yaml",
+		"--dry-run",
+		"--model", "gpt-4o",
+		"--no-merge",
+	)
+	require.NoError(t, err)
+	require.True(t, mock.called)
+
+	opts := mock.calledWith
+	assert.Equal(t, "openai", opts.Provider, "Provider must match")
+	assert.Equal(t, "Full flag test", opts.Description, "Description must match")
+	assert.Equal(t, "full.yaml", opts.OutputPath, "OutputPath must match")
+	assert.True(t, opts.DryRun, "DryRun must be true")
+	assert.Equal(t, "gpt-4o", opts.Model, "Model must match")
+	assert.True(t, opts.NoMerge, "NoMerge must be true")
+}
