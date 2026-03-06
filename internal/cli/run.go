@@ -85,7 +85,7 @@ func runTool(cmd *cobra.Command, args []string, cfg *runConfig) error {
 		}
 		return err
 	}
-	debugLog(cmd, "loading manifest from %s", manifestPath)
+	debugLog(cmd, "loaded manifest from %s", manifestPath)
 
 	// Find the tool by name.
 	var tool manifest.Tool
@@ -162,8 +162,11 @@ func extractRunFlags(args []string) (jsonMode bool, debugMode bool, manifestPath
 		switch {
 		case arg == "--json", strings.HasPrefix(arg, "--json="):
 			jsonMode = true
-		case arg == "--debug", strings.HasPrefix(arg, "--debug="):
+		case arg == "--debug":
 			debugMode = true
+		case strings.HasPrefix(arg, "--debug="):
+			val := strings.TrimPrefix(arg, "--debug=")
+			debugMode = val != "false" && val != "0" && val != ""
 		case arg == "--manifest" || arg == "-m":
 			if i+1 < len(args) {
 				i++

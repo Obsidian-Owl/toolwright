@@ -860,6 +860,47 @@ func TestDebugRun_DebugFlagExtractedDespiteDisableFlagParsing(t *testing.T) {
 			"--debug must be extracted in extractRunFlags")
 }
 
+func TestDebugRun_DebugEqualsFalse_NoDebugOutput(t *testing.T) {
+	// --debug=false must NOT enable debug mode.
+	dir := t.TempDir()
+	path := writeRunManifest(t, dir, runManifestScanTool())
+	mr := &mockRunner{result: &runner.Result{ExitCode: 0}}
+	cfg := &runConfig{Runner: mr, Resolver: &mockResolver{}}
+
+	_, stderr, err := executeRunCmd(cfg, "--debug=false", "-m", path, "scan", "./src")
+	require.NoError(t, err)
+
+	assert.NotContains(t, stderr, "[DEBUG ",
+		"--debug=false must not produce debug output")
+}
+
+func TestDebugRun_DebugEqualsZero_NoDebugOutput(t *testing.T) {
+	// --debug=0 must NOT enable debug mode.
+	dir := t.TempDir()
+	path := writeRunManifest(t, dir, runManifestScanTool())
+	mr := &mockRunner{result: &runner.Result{ExitCode: 0}}
+	cfg := &runConfig{Runner: mr, Resolver: &mockResolver{}}
+
+	_, stderr, err := executeRunCmd(cfg, "--debug=0", "-m", path, "scan", "./src")
+	require.NoError(t, err)
+
+	assert.NotContains(t, stderr, "[DEBUG ",
+		"--debug=0 must not produce debug output")
+}
+
+func TestDebugRun_DebugEqualsTrue_ProducesDebugOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := writeRunManifest(t, dir, runManifestScanTool())
+	mr := &mockRunner{result: &runner.Result{ExitCode: 0}}
+	cfg := &runConfig{Runner: mr, Resolver: &mockResolver{}}
+
+	_, stderr, err := executeRunCmd(cfg, "--debug=true", "-m", path, "scan", "./src")
+	require.NoError(t, err)
+
+	assert.Contains(t, stderr, "[DEBUG ",
+		"--debug=true must produce debug output")
+}
+
 func TestDebugRun_DebugFlagNotPassedToTool(t *testing.T) {
 	// --debug is a toolwright flag, not a tool flag. It must not appear
 	// in the args or flags passed to the runner.

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/Obsidian-Owl/toolwright"
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/Obsidian-Owl/toolwright/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +14,7 @@ import (
 const schemaPath = "schemas/toolwright.schema.json"
 
 // ---------------------------------------------------------------------------
-// Helper: load and compile the schema from the embed.FS
+// Helper: load and validate using the production schema.Validator
 // ---------------------------------------------------------------------------
 
 // loadSchemaBytes reads the schema file from the embedded FS and returns raw bytes.
@@ -26,35 +26,12 @@ func loadSchemaBytes(t *testing.T) []byte {
 	return data
 }
 
-// compileSchema compiles the embedded schema into a *jsonschema.Schema for validation.
-func compileSchema(t *testing.T) *jsonschema.Schema {
-	t.Helper()
-	data := loadSchemaBytes(t)
-
-	var schemaDoc any
-	err := json.Unmarshal(data, &schemaDoc)
-	require.NoError(t, err, "schema must be valid JSON")
-
-	c := jsonschema.NewCompiler()
-	err = c.AddResource(schemaPath, schemaDoc)
-	require.NoError(t, err, "schema must be a valid JSON Schema resource")
-
-	sch, err := c.Compile(schemaPath)
-	require.NoError(t, err, "schema must compile without error")
-	return sch
-}
-
-// validateJSON compiles the schema and validates the given JSON string against it.
-// Returns nil if valid, or the validation error.
+// validateJSON validates the given JSON string against the embedded schema
+// using the production schema.Validator (kaptinlin/jsonschema).
 func validateJSON(t *testing.T, jsonStr string) error {
 	t.Helper()
-	sch := compileSchema(t)
-
-	var doc any
-	err := json.Unmarshal([]byte(jsonStr), &doc)
-	require.NoError(t, err, "test input must be valid JSON: %s", jsonStr)
-
-	return sch.Validate(doc)
+	v := schema.NewValidator(toolwright.Schemas)
+	return v.Validate(schemaPath, []byte(jsonStr))
 }
 
 // ---------------------------------------------------------------------------
@@ -107,9 +84,15 @@ func TestSchema_HasCorrectDraftVersion(t *testing.T) {
 
 func TestSchema_CompilesAsJSONSchema(t *testing.T) {
 	// This proves the file is not just valid JSON but actually a valid JSON Schema
-	// that a compliant validator can compile.
-	sch := compileSchema(t)
-	require.NotNil(t, sch, "compiled schema must not be nil")
+	// that a compliant validator can compile. We validate a known-good document
+	// through the production validator to confirm compilation succeeds.
+	err := validateJSON(t, `{
+		"apiVersion": "toolwright/v1",
+		"kind": "Toolkit",
+		"metadata": {"name": "test", "version": "1.0.0", "description": "T"},
+		"tools": [{"name": "r", "description": "R", "entrypoint": "./r.sh"}]
+	}`)
+	require.NoError(t, err, "schema must compile and validate a known-good document")
 }
 
 // ---------------------------------------------------------------------------

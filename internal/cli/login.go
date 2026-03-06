@@ -67,7 +67,7 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 		}
 		return err
 	}
-	debugLog(cmd, "loading manifest from %s", manifestPath)
+	debugLog(cmd, "loaded manifest from %s", manifestPath)
 
 	// Find tool by name.
 	toolIdx := -1

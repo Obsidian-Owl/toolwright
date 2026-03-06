@@ -55,7 +55,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
-	debugLog(cmd, "loading manifest from %s", path)
+	debugLog(cmd, "loaded manifest from %s", path)
 
 	errs := []validateItem{}
 	warns := []validateItem{}
@@ -97,9 +97,14 @@ func runValidate(cmd *cobra.Command, args []string) error {
 		debugLog(cmd, "online check: %s", tk.Auth.ProviderURL)
 		ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 		defer cancel()
-		req, _ := http.NewRequestWithContext(ctx, http.MethodHead, tk.Auth.ProviderURL, nil)
-		resp, httpErr := http.DefaultClient.Do(req)
-		if httpErr != nil {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodHead, tk.Auth.ProviderURL, nil)
+		if reqErr != nil {
+			warns = append(warns, validateItem{
+				Path:    "auth.provider_url",
+				Message: fmt.Sprintf("provider_url is not a valid URL: %s", tk.Auth.ProviderURL),
+				Rule:    "provider-url-reachable",
+			})
+		} else if resp, httpErr := http.DefaultClient.Do(req); httpErr != nil {
 			warns = append(warns, validateItem{
 				Path:    "auth.provider_url",
 				Message: fmt.Sprintf("provider_url is unreachable: %s", tk.Auth.ProviderURL),
