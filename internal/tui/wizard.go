@@ -46,6 +46,9 @@ func (w *Wizard) WithOutput(wr io.Writer) *Wizard {
 // We also count newlines so that after the form runs we can detect whether EOF
 // was reached before all three expected newlines (one per field) were read.
 // That condition indicates the user aborted (partial or empty input).
+//
+// lineTracker is only used in accessible mode; it must not be injected in
+// bubbletea (non-accessible) mode where WithInput carries raw terminal events.
 type lineTracker struct {
 	r        io.Reader
 	newlines int
@@ -104,13 +107,21 @@ func (w *Wizard) Run(ctx context.Context) (*cli.WizardResult, error) {
 
 	form.WithAccessible(w.accessible)
 
-	// numFields is the number of fields that each require one line of input.
-	const numFields = 3
+	// numFields is the number of line-terminated inputs expected by the form:
+	// one per field (Description input, Runtime select, Auth select).
+	// Update this constant if the form gains or loses fields.
+	const numFields = 3 // Description + Runtime + Auth
 
+	// lineTracker is only applicable in accessible mode, where huh uses
+	// bufio.Scanner for line-oriented reads. In non-accessible (bubbletea)
+	// mode WithInput carries raw terminal event bytes; wrapping with
+	// lineTracker there would garble input.
 	var tracker *lineTracker
-	if w.in != nil {
+	if w.accessible && w.in != nil {
 		tracker = &lineTracker{r: w.in}
 		form.WithInput(tracker)
+	} else if w.in != nil {
+		form.WithInput(w.in)
 	}
 	if w.out != nil {
 		form.WithOutput(w.out)
@@ -123,7 +134,15 @@ func (w *Wizard) Run(ctx context.Context) (*cli.WizardResult, error) {
 	// huh's runAccessible silently swallows EOF and returns nil. Detect the
 	// case where the reader ran out of input before all fields were filled.
 	if tracker != nil && tracker.eofSeen && tracker.newlines < numFields {
-		return nil, huh.ErrUserAborted
+		return nil, fmt.Errorf("wizard: form run: %w", huh.ErrUserAborted)
+	}
+
+	// Defence-in-depth: select fields should always be non-empty after a
+	// successful form run (huh constrains them to the provided options).
+	// Guard here catches any future huh behaviour change that might silently
+	// return empty values.
+	if runtime == "" || auth == "" {
+		return nil, fmt.Errorf("wizard: form run: %w", huh.ErrUserAborted)
 	}
 
 	return &cli.WizardResult{

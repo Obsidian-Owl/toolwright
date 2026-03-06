@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -522,7 +523,7 @@ func TestWizard_ResultRuntimeIsValidEnum(t *testing.T) {
 	}
 
 	for i := 1; i <= 4; i++ {
-		input := "desc\n" + string(rune('0'+i)) + "\n1\n"
+		input := "desc\n" + strconv.Itoa(i) + "\n1\n"
 		w := newTestWizard(input)
 		result, err := w.Run(context.Background())
 		require.NoError(t, err)
@@ -538,7 +539,7 @@ func TestWizard_ResultAuthIsValidEnum(t *testing.T) {
 	}
 
 	for i := 1; i <= 3; i++ {
-		input := "desc\n1\n" + string(rune('0'+i)) + "\n"
+		input := "desc\n1\n" + strconv.Itoa(i) + "\n"
 		w := newTestWizard(input)
 		result, err := w.Run(context.Background())
 		require.NoError(t, err)
