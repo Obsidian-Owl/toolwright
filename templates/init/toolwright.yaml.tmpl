@@ -14,7 +14,7 @@ tools:
 {{- if eq .Auth "token"}}
 auth:
   type: token
-  token_env: {{.Name | upper}}_TOKEN
+  token_env: "{{.Name | upper | yamlEscape}}_TOKEN"
   token_flag: --token
 {{- else if eq .Auth "oauth2"}}
 auth:
