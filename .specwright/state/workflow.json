@@ -6,9 +6,9 @@
     "status": "building",
     "workDir": ".specwright/work/toolwright-completions/units/wiring",
     "unitId": "wiring",
-    "tasksTotal": null,
+    "tasksTotal": 4,
     "tasksCompleted": [],
-    "currentTask": null,
+    "currentTask": "task-1-schema",
     "intensity": "full"
   },
   "gates": {},
@@ -18,6 +18,6 @@
     { "id": "generate", "description": "AI manifest generator with 3 LLM providers, CLI flag additions", "status": "shipped", "order": 3, "workDir": ".specwright/work/toolwright-completions/units/generate" },
     { "id": "wiring", "description": "JSON Schema, exit codes, debug logging, wire.go production wiring, cleanup", "status": "building", "order": 4, "workDir": ".specwright/work/toolwright-completions/units/wiring" }
   ],
-  "lock": null,
-  "lastUpdated": "2026-03-06T04:22:00Z"
+  "lock": "sw-build",
+  "lastUpdated": "2026-03-06T05:10:00Z"
 }
