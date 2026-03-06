@@ -49,7 +49,7 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 
 	// Require exactly one positional argument: the tool name.
 	if len(args) == 0 {
-		err := fmt.Errorf("requires tool name: run 'toolwright login <tool-name>'")
+		err := &UsageError{Err: fmt.Errorf("requires tool name: run 'toolwright login <tool-name>'")}
 		if jsonMode {
 			_ = outputError(cmd.OutOrStdout(), "usage_error", err.Error(), "provide a tool name as the first argument")
 		}

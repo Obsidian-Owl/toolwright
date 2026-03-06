@@ -64,7 +64,7 @@ func runTool(cmd *cobra.Command, args []string, cfg *runConfig) error {
 
 	// Require at least one arg: the tool name.
 	if len(remaining) == 0 {
-		return fmt.Errorf("requires tool name: usage: toolwright run <tool-name> [args...]")
+		return &UsageError{Err: fmt.Errorf("requires tool name: usage: toolwright run <tool-name> [args...]")}
 	}
 
 	toolName := remaining[0]

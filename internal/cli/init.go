@@ -80,7 +80,7 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 
 	// Require exactly one positional argument: the project name.
 	if len(args) == 0 {
-		err := fmt.Errorf("requires project name: run 'toolwright init <project-name>'")
+		err := &UsageError{Err: fmt.Errorf("requires project name: run 'toolwright init <project-name>'")}
 		if jsonMode {
 			_ = outputError(cmd.OutOrStdout(), "usage_error", err.Error(),
 				"provide a project name as the first argument")
