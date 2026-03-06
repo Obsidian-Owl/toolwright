@@ -347,6 +347,29 @@ func TestOpenAIProvider_Complete_EmptyPrompt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AC-4: Transport-level errors must not leak the API key embedded in headers.
+// This covers the *url.Error path where http.Client.Do itself fails (DNS, TLS,
+// context cancel). For OpenAI, keys are in headers (not the URL), so the
+// risk is lower, but sanitiseHTTPError is still applied for defence-in-depth.
+// ---------------------------------------------------------------------------
+
+func TestOpenAIProvider_Complete_TransportError_NoKeyInError(t *testing.T) {
+	secretKey := "sk-openai-transport-secret"
+	// Hijack and close so the client gets a transport error, not an HTTP error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	p := newOpenAIProviderWithURL(secretKey, srv.Client(), srv.URL)
+	_, err := p.Complete(context.Background(), "test", "")
+	require.Error(t, err, "transport failure must return error")
+	assert.NotContains(t, err.Error(), secretKey,
+		"transport-level error must NEVER contain the API key")
+}
+
+// ---------------------------------------------------------------------------
 // AC-12: Constructor accepts *http.Client (nil uses default).
 // ---------------------------------------------------------------------------
 

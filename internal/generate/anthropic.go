@@ -99,7 +99,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, prompt, model string) 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("anthropic: unexpected status %d: %s", resp.StatusCode, respBytes)
+		return "", fmt.Errorf("anthropic: unexpected status %d", resp.StatusCode)
 	}
 
 	var parsed anthropicResponse
