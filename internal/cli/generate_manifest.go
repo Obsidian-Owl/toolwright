@@ -7,34 +7,20 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Obsidian-Owl/toolwright/internal/generate"
 )
 
 // ManifestGenerator abstracts AI manifest generation so the CLI layer
 // can be tested without making real API calls.
 type ManifestGenerator interface {
-	Generate(ctx context.Context, opts ManifestGenerateOptions) (*ManifestGenerateResult, error)
+	Generate(ctx context.Context, opts generate.ManifestGenerateOptions) (*generate.ManifestGenerateResult, error)
 }
 
 // manifestGenerateConfig holds injectable dependencies for the
 // generate manifest subcommand.
 type manifestGenerateConfig struct {
 	Generator ManifestGenerator
-}
-
-// ManifestGenerateOptions describes what the manifest generator should produce.
-type ManifestGenerateOptions struct {
-	Provider    string // "anthropic", "openai", "gemini"
-	Description string // User-provided description of what the toolkit does
-	OutputPath  string // Where to write the manifest (empty = stdout for dry-run)
-	DryRun      bool   // If true, print to stdout instead of writing
-	Model       string // LLM model override; empty = use provider default
-	NoMerge     bool   // If true and OutputPath exists, return error instead of overwriting
-}
-
-// ManifestGenerateResult holds the output of a manifest generation.
-type ManifestGenerateResult struct {
-	Manifest string // The generated YAML content
-	Provider string // Which provider was used
 }
 
 // validManifestProviders is the set of accepted provider values (case-sensitive).
@@ -81,7 +67,7 @@ func runGenerateManifest(cmd *cobra.Command, cfg *manifestGenerateConfig) error 
 	model, _ := cmd.Flags().GetString("model")
 	noMerge, _ := cmd.Flags().GetBool("no-merge")
 
-	opts := ManifestGenerateOptions{
+	opts := generate.ManifestGenerateOptions{
 		Provider:    provider,
 		Description: description,
 		OutputPath:  outputPath,
@@ -90,9 +76,6 @@ func runGenerateManifest(cmd *cobra.Command, cfg *manifestGenerateConfig) error 
 		NoMerge:     noMerge,
 	}
 
-	if cfg.Generator == nil {
-		return fmt.Errorf("AI manifest generation is not yet implemented")
-	}
 	result, err := cfg.Generator.Generate(cmd.Context(), opts)
 	if err != nil {
 		if jsonMode {
@@ -120,7 +103,7 @@ func validateManifestProvider(provider string) error {
 
 // outputManifestResult writes either JSON or human-readable output for a
 // successful manifest generation result.
-func outputManifestResult(cmd *cobra.Command, jsonMode, dryRun bool, outputPath string, result *ManifestGenerateResult) error {
+func outputManifestResult(cmd *cobra.Command, jsonMode, dryRun bool, outputPath string, result *generate.ManifestGenerateResult) error {
 	w := cmd.OutOrStdout()
 
 	if jsonMode {

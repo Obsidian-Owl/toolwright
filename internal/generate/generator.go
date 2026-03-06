@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Obsidian-Owl/toolwright/internal/cli"
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 )
 
@@ -44,7 +43,7 @@ func (g *Generator) Providers() map[string]LLMProvider {
 // Generate produces a toolwright manifest from the given options.
 // It attempts at most 2 calls to the provider; the second is a retry on error
 // or invalid YAML.
-func (g *Generator) Generate(ctx context.Context, opts cli.ManifestGenerateOptions) (*cli.ManifestGenerateResult, error) {
+func (g *Generator) Generate(ctx context.Context, opts ManifestGenerateOptions) (*ManifestGenerateResult, error) {
 	provider, ok := g.providers[opts.Provider]
 	if !ok {
 		return nil, fmt.Errorf("generate: unknown provider %q", opts.Provider)
@@ -102,7 +101,7 @@ func (g *Generator) Generate(ctx context.Context, opts cli.ManifestGenerateOptio
 		return nil, lastErr
 	}
 
-	return &cli.ManifestGenerateResult{
+	return &ManifestGenerateResult{
 		Manifest: yaml,
 		Provider: opts.Provider,
 	}, nil

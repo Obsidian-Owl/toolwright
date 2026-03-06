@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Obsidian-Owl/toolwright/internal/scaffold"
+	"github.com/Obsidian-Owl/toolwright/internal/tui"
 )
 
 // ---------------------------------------------------------------------------
@@ -36,11 +37,11 @@ func (m *mockScaffolder) Scaffold(_ context.Context, opts scaffold.ScaffoldOptio
 
 type mockWizard struct {
 	called bool
-	result *WizardResult
+	result *tui.WizardResult
 	err    error
 }
 
-func (m *mockWizard) Run(_ context.Context) (*WizardResult, error) {
+func (m *mockWizard) Run(_ context.Context) (*tui.WizardResult, error) {
 	m.called = true
 	if m.err != nil {
 		return nil, m.err
@@ -255,7 +256,7 @@ func TestInit_Yes_CallsScaffolderWithCorrectDefaults(t *testing.T) {
 
 func TestInit_Yes_WizardNotCalled(t *testing.T) {
 	scaf := &mockScaffolder{result: defaultScaffoldResult("my-tool")}
-	wiz := &mockWizard{result: &WizardResult{Name: "should-not-use"}}
+	wiz := &mockWizard{result: &tui.WizardResult{}}
 	cfg := &initConfig{Scaffolder: scaf, Wizard: wiz}
 
 	_, err := executeInitCmd(cfg, "my-tool", "--yes")
@@ -367,8 +368,7 @@ func TestInit_NoYes_WizardCalled(t *testing.T) {
 	os.Unsetenv("CI")
 
 	scaf := &mockScaffolder{result: defaultScaffoldResult("my-tool")}
-	wiz := &mockWizard{result: &WizardResult{
-		Name:        "my-tool",
+	wiz := &mockWizard{result: &tui.WizardResult{
 		Description: "From wizard",
 		Runtime:     "go",
 		Auth:        "token",
@@ -386,8 +386,7 @@ func TestInit_NoYes_WizardResultUsedForScaffolder(t *testing.T) {
 	os.Unsetenv("CI")
 
 	scaf := &mockScaffolder{result: defaultScaffoldResult("my-tool")}
-	wiz := &mockWizard{result: &WizardResult{
-		Name:        "my-tool",
+	wiz := &mockWizard{result: &tui.WizardResult{
 		Description: "Wizard description",
 		Runtime:     "python",
 		Auth:        "oauth2",
@@ -452,8 +451,7 @@ func TestInit_CITrue_WizardNotCalled(t *testing.T) {
 	t.Setenv("CI", "true")
 
 	scaf := &mockScaffolder{result: defaultScaffoldResult("my-tool")}
-	wiz := &mockWizard{result: &WizardResult{
-		Name:        "my-tool",
+	wiz := &mockWizard{result: &tui.WizardResult{
 		Description: "should not use this",
 		Runtime:     "typescript",
 		Auth:        "oauth2",
@@ -472,8 +470,7 @@ func TestInit_CI1_WizardNotCalled(t *testing.T) {
 	t.Setenv("CI", "1")
 
 	scaf := &mockScaffolder{result: defaultScaffoldResult("my-tool")}
-	wiz := &mockWizard{result: &WizardResult{
-		Name:        "my-tool",
+	wiz := &mockWizard{result: &tui.WizardResult{
 		Description: "should not use this",
 		Runtime:     "go",
 		Auth:        "token",
@@ -511,8 +508,7 @@ func TestInit_CIFalse_WizardCalled(t *testing.T) {
 	t.Setenv("CI", "false")
 
 	scaf := &mockScaffolder{result: defaultScaffoldResult("proj")}
-	wiz := &mockWizard{result: &WizardResult{
-		Name:        "proj",
+	wiz := &mockWizard{result: &tui.WizardResult{
 		Description: "from wizard",
 		Runtime:     "shell",
 		Auth:        "none",
@@ -826,8 +822,7 @@ func TestInit_NoYes_RuntimeFlagIgnoredWhenWizardUsed(t *testing.T) {
 	os.Unsetenv("CI")
 
 	scaf := &mockScaffolder{result: defaultScaffoldResult("proj")}
-	wiz := &mockWizard{result: &WizardResult{
-		Name:        "proj",
+	wiz := &mockWizard{result: &tui.WizardResult{
 		Description: "Wizard picked this",
 		Runtime:     "typescript",
 		Auth:        "none",
@@ -932,7 +927,7 @@ func TestInit_CIAndYes_ScaffolderCalledWizardNot(t *testing.T) {
 	t.Setenv("CI", "true")
 
 	scaf := &mockScaffolder{result: defaultScaffoldResult("proj")}
-	wiz := &mockWizard{result: &WizardResult{Runtime: "go"}}
+	wiz := &mockWizard{result: &tui.WizardResult{Runtime: "go"}}
 	cfg := &initConfig{Scaffolder: scaf, Wizard: wiz}
 
 	_, err := executeInitCmd(cfg, "proj", "--yes")

@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Obsidian-Owl/toolwright/internal/tui"
 )
 
 // ---------------------------------------------------------------------------
@@ -328,4 +332,346 @@ func TestBuildRootCommand_ReturnsIndependentInstances(t *testing.T) {
 	// mutable command tree.
 	assert.NotSame(t, cmd1, cmd2,
 		"BuildRootCommand must return a new command instance each call (no global state)")
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: BuildRootCommand wires REAL implementations (not nil)
+// AC-8: Nil-guards are removed — commands must not return "not yet implemented"
+// ---------------------------------------------------------------------------
+
+// TestBuildRootCommand_InitHasRealScaffolder verifies that BuildRootCommand
+// wires a real scaffolder into the init command. The current code passes
+// Scaffolder: nil, so "init my-proj --yes" hits the nil-guard and returns
+// "project scaffolding is not yet implemented". This test MUST FAIL against
+// the current code because the scaffolder IS nil.
+func TestBuildRootCommand_InitHasRealScaffolder(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	// Wire output to buffers so we capture everything.
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+
+	// Use --yes to skip the wizard (non-interactive) and point output at a
+	// temp dir so that a real scaffolder writes somewhere safe.
+	tmpDir := t.TempDir()
+	cmd.SetArgs([]string{"init", "test-proj", "--yes", "--output", tmpDir})
+
+	err := cmd.Execute()
+
+	// The key assertion: even if the real scaffolder fails for some other
+	// reason (e.g., template error), the error must NOT be the nil-guard
+	// sentinel message. If the scaffolder is wired, we will never see this
+	// message.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "project scaffolding is not yet implemented",
+			"init must not return the nil-guard error — BuildRootCommand must wire a real scaffolder")
+		assert.NotContains(t, err.Error(), "not yet implemented",
+			"init must not return any 'not yet implemented' error — all deps must be wired")
+	}
+	// If err is nil, the scaffolder ran successfully — that also passes.
+}
+
+// TestBuildRootCommand_InitHasRealWizard verifies that BuildRootCommand
+// wires a real wizard into the init command. The current code passes
+// Wizard: nil, so running init without --yes hits the nil-guard:
+// "interactive wizard is not yet implemented".
+// We test this by running init WITHOUT --yes and checking the error is
+// not the nil-guard sentinel. In a non-TTY test environment the wizard
+// may fail for other reasons (no terminal), but it must NOT be because
+// the wizard is nil.
+func TestBuildRootCommand_InitHasRealWizard(t *testing.T) {
+	// Ensure we are not in CI mode so the wizard path is taken.
+	t.Setenv("CI", "")
+
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+
+	// Run init without --yes to trigger the wizard path.
+	cmd.SetArgs([]string{"init", "test-proj"})
+
+	err := cmd.Execute()
+	// The wizard will likely error in a non-TTY test environment, but the
+	// error must NOT be the nil-guard message.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "interactive wizard is not yet implemented",
+			"init without --yes must not return the nil-guard error — BuildRootCommand must wire a real wizard")
+		assert.NotContains(t, err.Error(), "not yet implemented",
+			"init must not return any 'not yet implemented' error — wizard must be wired")
+	}
+}
+
+// TestBuildRootCommand_GenerateManifestHasRealGenerator verifies that
+// BuildRootCommand wires a real ManifestGenerator into the generate manifest
+// subcommand. The current code passes Generator: nil, so running
+// "generate manifest --provider anthropic --dry-run" returns
+// "AI manifest generation is not yet implemented". This test MUST FAIL
+// against the current code.
+func TestBuildRootCommand_GenerateManifestHasRealGenerator(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+
+	// Use --dry-run so nothing is written to disk, and provide a valid
+	// provider. The real generator needs an API key, so it may fail with
+	// an auth error — but it must NOT fail with the nil-guard sentinel.
+	cmd.SetArgs([]string{"generate", "manifest", "--provider", "anthropic", "--dry-run"})
+
+	err := cmd.Execute()
+	// The generator will likely fail (no API key in test env), but the error
+	// must NOT be the nil-guard message.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "AI manifest generation is not yet implemented",
+			"generate manifest must not return the nil-guard error — BuildRootCommand must wire a real generator")
+		assert.NotContains(t, err.Error(), "not yet implemented",
+			"generate manifest must not return any 'not yet implemented' error — generator must be wired")
+	}
+}
+
+// TestBuildRootCommand_NoNilPanics_InitWithYes ensures that calling init
+// through the fully-wired command tree does not panic due to nil deps.
+// This is a regression safeguard — it verifies structural soundness.
+func TestBuildRootCommand_NoNilPanics_InitWithYes(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	outBuf := &bytes.Buffer{}
+	cmd.SetOut(outBuf)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"init", "panic-check-proj", "--yes", "--output", t.TempDir()})
+
+	// This must not panic. We use require.NotPanics to catch nil-pointer
+	// dereferences from unwired deps.
+	require.NotPanics(t, func() {
+		_ = cmd.Execute()
+	}, "init --yes must not panic — all deps must be non-nil")
+}
+
+// TestBuildRootCommand_NoNilPanics_GenerateManifest ensures that calling
+// generate manifest through the fully-wired command tree does not panic.
+func TestBuildRootCommand_NoNilPanics_GenerateManifest(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	outBuf := &bytes.Buffer{}
+	cmd.SetOut(outBuf)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"generate", "manifest", "--provider", "anthropic", "--dry-run"})
+
+	require.NotPanics(t, func() {
+		_ = cmd.Execute()
+	}, "generate manifest must not panic — generator must be non-nil")
+}
+
+// TestBuildRootCommand_InitErrorIsNotNilGuard_MultipleRuntimes exercises
+// the init command with various runtimes through the fully-wired tree to
+// ensure none of them hit the nil-guard. A lazy implementation that only
+// wires for one runtime would be caught.
+func TestBuildRootCommand_InitErrorIsNotNilGuard_MultipleRuntimes(t *testing.T) {
+	runtimes := []string{"shell", "go", "python", "typescript"}
+	for _, rt := range runtimes {
+		t.Run(rt, func(t *testing.T) {
+			cmd := BuildRootCommand()
+			require.NotNil(t, cmd)
+
+			outBuf := &bytes.Buffer{}
+			cmd.SetOut(outBuf)
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"init", "proj-" + rt, "--yes", "--runtime", rt, "--output", t.TempDir()})
+
+			err := cmd.Execute()
+			if err != nil {
+				assert.NotContains(t, err.Error(), "not yet implemented",
+					"init --yes --runtime %s must not hit nil-guard", rt)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-9: WizardResult.Name field must be removed
+// ---------------------------------------------------------------------------
+
+// TestWizardResult_HasNoNameField uses reflection to verify the WizardResult
+// struct does NOT have a Name field. The current struct has Name as the first
+// field, so this test MUST FAIL against the current code.
+func TestWizardResult_HasNoNameField(t *testing.T) {
+	rt := reflect.TypeOf(tui.WizardResult{})
+
+	_, hasName := rt.FieldByName("Name")
+	assert.False(t, hasName,
+		"WizardResult must NOT have a Name field — the wizard never sets it "+
+			"(name comes from the positional arg); found field Name on WizardResult")
+}
+
+// TestWizardResult_OnlyHasExpectedFields verifies the exact set of fields
+// in WizardResult. After removing Name, only Description, Runtime, and Auth
+// should remain. This catches partial removals or accidental additions.
+func TestWizardResult_OnlyHasExpectedFields(t *testing.T) {
+	rt := reflect.TypeOf(tui.WizardResult{})
+
+	expectedFields := map[string]bool{
+		"Description": true,
+		"Runtime":     true,
+		"Auth":        true,
+	}
+
+	actualFields := make(map[string]bool)
+	for i := 0; i < rt.NumField(); i++ {
+		actualFields[rt.Field(i).Name] = true
+	}
+
+	// Check no unexpected fields exist.
+	for name := range actualFields {
+		assert.True(t, expectedFields[name],
+			"WizardResult has unexpected field %q — only Description, Runtime, Auth are expected", name)
+	}
+
+	// Check all expected fields exist.
+	for name := range expectedFields {
+		assert.True(t, actualFields[name],
+			"WizardResult is missing expected field %q", name)
+	}
+
+	assert.Equal(t, len(expectedFields), rt.NumField(),
+		"WizardResult must have exactly 3 fields (Description, Runtime, Auth), got %d", rt.NumField())
+}
+
+// TestWizardResult_FieldCount is a belt-and-suspenders check: the struct
+// must have exactly 3 fields after Name is removed (currently it has 4).
+func TestWizardResult_FieldCount(t *testing.T) {
+	rt := reflect.TypeOf(tui.WizardResult{})
+	assert.Equal(t, 3, rt.NumField(),
+		"WizardResult must have exactly 3 fields (Description, Runtime, Auth); "+
+			"currently has %d — the Name field should be removed", rt.NumField())
+}
+
+// ---------------------------------------------------------------------------
+// AC-8: Nil-guard sentinel messages must not appear in the source code
+// These tests verify the BEHAVIOR: running through BuildRootCommand must
+// never produce the sentinel error strings. The above tests cover this.
+// Below we add specific assertions about the exact sentinel strings to
+// ensure we catch the EXACT nil-guard patterns.
+// ---------------------------------------------------------------------------
+
+// TestBuildRootCommand_InitScaffolderError_NotSentinel runs init through
+// the production wiring and verifies the exact sentinel string from the
+// nil-guard at init.go line 155 is absent from any error.
+func TestBuildRootCommand_InitScaffolderError_NotSentinel(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"init", "sentinel-check", "--yes", "--output", t.TempDir()})
+
+	err := cmd.Execute()
+	if err != nil {
+		// These are the exact sentinel strings from the nil-guards.
+		assert.NotEqual(t, "project scaffolding is not yet implemented", err.Error(),
+			"init must not return the exact scaffolder nil-guard sentinel")
+		assert.NotEqual(t, "interactive wizard is not yet implemented; use --yes or set CI=true", err.Error(),
+			"init must not return the exact wizard nil-guard sentinel")
+	}
+}
+
+// TestBuildRootCommand_GenerateManifestError_NotSentinel runs generate
+// manifest through the production wiring and verifies the exact sentinel
+// string from generate_manifest.go line 94 is absent.
+func TestBuildRootCommand_GenerateManifestError_NotSentinel(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"generate", "manifest", "--provider", "anthropic", "--dry-run"})
+
+	err := cmd.Execute()
+	if err != nil {
+		assert.NotEqual(t, "AI manifest generation is not yet implemented", err.Error(),
+			"generate manifest must not return the exact generator nil-guard sentinel")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-11: Binary builds and all commands are findable (regression)
+// ---------------------------------------------------------------------------
+
+// TestBuildRootCommand_InitSubcommandFindable verifies that the init
+// subcommand can be found by traversal in the fully-wired command tree.
+func TestBuildRootCommand_InitSubcommandFindable(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	var initCmd *cobra.Command
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "init" {
+			initCmd = sub
+			break
+		}
+	}
+
+	require.NotNil(t, initCmd,
+		"init subcommand must be findable in the BuildRootCommand tree")
+	assert.NotNil(t, initCmd.RunE,
+		"init subcommand must have a RunE function (it is directly runnable)")
+}
+
+// TestBuildRootCommand_GenerateManifestSubcommandFindable verifies that
+// generate manifest can be found by traversal.
+func TestBuildRootCommand_GenerateManifestSubcommandFindable(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	var genCmd *cobra.Command
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "generate" {
+			genCmd = sub
+			break
+		}
+	}
+	require.NotNil(t, genCmd,
+		"generate subcommand must exist on root")
+
+	var manifestCmd *cobra.Command
+	for _, sub := range genCmd.Commands() {
+		if sub.Name() == "manifest" {
+			manifestCmd = sub
+			break
+		}
+	}
+	require.NotNil(t, manifestCmd,
+		"manifest subcommand must be findable under generate")
+	assert.NotNil(t, manifestCmd.RunE,
+		"generate manifest subcommand must have a RunE function")
+}
+
+// TestBuildRootCommand_InitHelpDoesNotMentionNotImplemented verifies that
+// even the help output for init does not leak "not yet implemented".
+func TestBuildRootCommand_InitHelpDoesNotMentionNotImplemented(t *testing.T) {
+	cmd := BuildRootCommand()
+	require.NotNil(t, cmd)
+
+	outBuf := &bytes.Buffer{}
+	cmd.SetOut(outBuf)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"init", "--help"})
+
+	err := cmd.Execute()
+	require.NoError(t, err, "init --help must not error")
+
+	helpText := outBuf.String()
+	assert.NotContains(t, strings.ToLower(helpText), "not yet implemented",
+		"init help text must not mention 'not yet implemented'")
 }

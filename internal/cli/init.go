@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Obsidian-Owl/toolwright/internal/scaffold"
+	"github.com/Obsidian-Owl/toolwright/internal/tui"
 )
 
 // scaffolder abstracts project scaffolding so the CLI layer can be tested
@@ -15,17 +16,9 @@ type scaffolder interface {
 	Scaffold(ctx context.Context, opts scaffold.ScaffoldOptions) (*scaffold.ScaffoldResult, error)
 }
 
-// WizardResult describes the user's choices from the TUI wizard.
-type WizardResult struct {
-	Name        string
-	Description string
-	Runtime     string
-	Auth        string
-}
-
 // initWizard abstracts the TUI wizard interaction.
 type initWizard interface {
-	Run(ctx context.Context) (*WizardResult, error)
+	Run(ctx context.Context) (*tui.WizardResult, error)
 }
 
 // initConfig holds injectable dependencies for the init command.
@@ -131,9 +124,6 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 		}
 	} else {
 		// Interactive mode: run the wizard.
-		if cfg.Wizard == nil {
-			return fmt.Errorf("interactive wizard is not yet implemented; use --yes or set CI=true")
-		}
 		wizResult, err := cfg.Wizard.Run(cmd.Context())
 		if err != nil {
 			if jsonMode {
@@ -151,9 +141,6 @@ func runInit(cmd *cobra.Command, args []string, cfg *initConfig) error {
 		}
 	}
 
-	if cfg.Scaffolder == nil {
-		return fmt.Errorf("project scaffolding is not yet implemented")
-	}
 	result, err := cfg.Scaffolder.Scaffold(cmd.Context(), opts)
 	if err != nil {
 		if jsonMode {

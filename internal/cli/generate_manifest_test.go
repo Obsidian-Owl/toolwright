@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Obsidian-Owl/toolwright/internal/generate"
 )
 
 // ---------------------------------------------------------------------------
@@ -21,12 +23,12 @@ import (
 
 type mockManifestGenerator struct {
 	called     bool
-	calledWith ManifestGenerateOptions
-	result     *ManifestGenerateResult
+	calledWith generate.ManifestGenerateOptions
+	result     *generate.ManifestGenerateResult
 	err        error
 }
 
-func (m *mockManifestGenerator) Generate(_ context.Context, opts ManifestGenerateOptions) (*ManifestGenerateResult, error) {
+func (m *mockManifestGenerator) Generate(_ context.Context, opts generate.ManifestGenerateOptions) (*generate.ManifestGenerateResult, error) {
 	m.called = true
 	m.calledWith = opts
 	if m.err != nil {
@@ -59,8 +61,8 @@ func executeGenerateManifestCmd(cfg *manifestGenerateConfig, args ...string) (st
 
 // defaultManifestResult returns a ManifestGenerateResult suitable for most
 // tests.
-func defaultManifestResult() *ManifestGenerateResult {
-	return &ManifestGenerateResult{
+func defaultManifestResult() *generate.ManifestGenerateResult {
+	return &generate.ManifestGenerateResult{
 		Manifest: "apiVersion: toolwright/v1\nkind: Toolkit\nmetadata:\n  name: generated\n  version: 1.0.0\n  description: AI-generated manifest\ntools:\n  - name: hello\n    description: Say hello\n    entrypoint: ./hello.sh\n",
 		Provider: "anthropic",
 	}
@@ -166,7 +168,7 @@ func TestGenerateManifest_ValidProviders(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.provider, func(t *testing.T) {
 			mock := &mockManifestGenerator{
-				result: &ManifestGenerateResult{
+				result: &generate.ManifestGenerateResult{
 					Manifest: "apiVersion: toolwright/v1\nkind: Toolkit\n",
 					Provider: tc.provider,
 				},
@@ -280,7 +282,7 @@ func TestGenerateManifest_ProviderCaseSensitive(t *testing.T) {
 
 func TestGenerateManifest_OptionsPassthrough(t *testing.T) {
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: "apiVersion: toolwright/v1\nkind: Toolkit\n",
 			Provider: "anthropic",
 		},
@@ -308,7 +310,7 @@ func TestGenerateManifest_OptionsPassthrough(t *testing.T) {
 
 func TestGenerateManifest_DefaultOutputPath_PassedToGenerator(t *testing.T) {
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: "apiVersion: toolwright/v1\n",
 			Provider: "openai",
 		},
@@ -324,7 +326,7 @@ func TestGenerateManifest_DefaultOutputPath_PassedToGenerator(t *testing.T) {
 
 func TestGenerateManifest_EmptyDescription_PassedToGenerator(t *testing.T) {
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: "apiVersion: toolwright/v1\n",
 			Provider: "gemini",
 		},
@@ -353,11 +355,11 @@ func TestGenerateManifest_GeneratorCalledExactlyOnce(t *testing.T) {
 // countingManifestGenerator counts the number of times Generate is called.
 type countingManifestGenerator struct {
 	callCount int
-	result    *ManifestGenerateResult
+	result    *generate.ManifestGenerateResult
 	err       error
 }
 
-func (c *countingManifestGenerator) Generate(_ context.Context, _ ManifestGenerateOptions) (*ManifestGenerateResult, error) {
+func (c *countingManifestGenerator) Generate(_ context.Context, _ generate.ManifestGenerateOptions) (*generate.ManifestGenerateResult, error) {
 	c.callCount++
 	return c.result, c.err
 }
@@ -449,7 +451,7 @@ func TestGenerateManifest_NoDryRun_DefaultFalse(t *testing.T) {
 func TestGenerateManifest_DryRun_OutputContainsManifest(t *testing.T) {
 	expectedYAML := "apiVersion: toolwright/v1\nkind: Toolkit\nmetadata:\n  name: my-tool\n"
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: expectedYAML,
 			Provider: "anthropic",
 		},
@@ -474,7 +476,7 @@ func TestGenerateManifest_DryRun_ManifestContentVaries(t *testing.T) {
 	outputs := make([]string, 0, len(manifests))
 	for _, m := range manifests {
 		mock := &mockManifestGenerator{
-			result: &ManifestGenerateResult{
+			result: &generate.ManifestGenerateResult{
 				Manifest: m,
 				Provider: "anthropic",
 			},
@@ -526,7 +528,7 @@ func TestGenerateManifest_OutputShortForm(t *testing.T) {
 
 func TestGenerateManifest_JSONMode_Success(t *testing.T) {
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: "apiVersion: toolwright/v1\nkind: Toolkit\n",
 			Provider: "anthropic",
 		},
@@ -569,7 +571,7 @@ func TestGenerateManifest_JSONMode_Success_ProviderVaries(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.provider, func(t *testing.T) {
 			mock := &mockManifestGenerator{
-				result: &ManifestGenerateResult{
+				result: &generate.ManifestGenerateResult{
 					Manifest: "apiVersion: toolwright/v1\n",
 					Provider: tc.provider,
 				},
@@ -674,7 +676,7 @@ func TestGenerateManifest_JSONMode_InvalidProvider(t *testing.T) {
 
 func TestGenerateManifest_HumanOutput_MentionsProvider(t *testing.T) {
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: "apiVersion: toolwright/v1\n",
 			Provider: "anthropic",
 		},
@@ -690,7 +692,7 @@ func TestGenerateManifest_HumanOutput_MentionsProvider(t *testing.T) {
 
 func TestGenerateManifest_HumanOutput_MentionsOutputPath(t *testing.T) {
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: "apiVersion: toolwright/v1\n",
 			Provider: "openai",
 		},
@@ -706,7 +708,7 @@ func TestGenerateManifest_HumanOutput_MentionsOutputPath(t *testing.T) {
 
 func TestGenerateManifest_HumanOutput_DryRun_MentionsStdout(t *testing.T) {
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: "apiVersion: toolwright/v1\nkind: Toolkit\nmetadata:\n  name: test\n",
 			Provider: "anthropic",
 		},
@@ -725,7 +727,7 @@ func TestGenerateManifest_HumanOutput_DifferentProviders_DifferentOutput(t *test
 	outputs := make(map[string]string)
 	for _, provider := range []string{"anthropic", "openai", "gemini"} {
 		mock := &mockManifestGenerator{
-			result: &ManifestGenerateResult{
+			result: &generate.ManifestGenerateResult{
 				Manifest: "apiVersion: toolwright/v1\n",
 				Provider: provider,
 			},
@@ -896,7 +898,7 @@ func TestGenerateManifest_NonJSONMode_NoJSONInOutput(t *testing.T) {
 func TestGenerateManifest_NonDryRun_WritesFileToPath(t *testing.T) {
 	expectedYAML := "apiVersion: toolwright/v1\nkind: Toolkit\nmetadata:\n  name: written\n"
 	mock := &mockManifestGenerator{
-		result: &ManifestGenerateResult{
+		result: &generate.ManifestGenerateResult{
 			Manifest: expectedYAML,
 			Provider: "anthropic",
 		},

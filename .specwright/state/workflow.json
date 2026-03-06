@@ -7,8 +7,8 @@
     "workDir": ".specwright/work/toolwright-completions/units/wiring",
     "unitId": "wiring",
     "tasksTotal": 4,
-    "tasksCompleted": [],
-    "currentTask": "task-1-schema",
+    "tasksCompleted": ["task-1-schema", "task-2-exit-codes", "task-3-debug-logging"],
+    "currentTask": "task-4-wiring",
     "intensity": "full"
   },
   "gates": {},
