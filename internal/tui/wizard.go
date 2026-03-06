@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/charmbracelet/huh"
@@ -69,7 +70,7 @@ func (t *lineTracker) Read(p []byte) (int, error) {
 // It respects ctx cancellation and propagates huh.ErrUserAborted as-is.
 func (w *Wizard) Run(ctx context.Context) (*cli.WizardResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("wizard: context already cancelled: %w", err)
 	}
 
 	var description, runtime, auth string
@@ -116,7 +117,7 @@ func (w *Wizard) Run(ctx context.Context) (*cli.WizardResult, error) {
 	}
 
 	if err := form.RunWithContext(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("wizard: form run: %w", err)
 	}
 
 	// huh's runAccessible silently swallows EOF and returns nil. Detect the
