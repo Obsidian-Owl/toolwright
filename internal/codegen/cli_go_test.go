@@ -1590,3 +1590,663 @@ func TestGoCLI_AC10_ArrayParseErrorFormat(t *testing.T) {
 	assert.Contains(t, content, "invalid value",
 		"array parse error must say 'invalid value'")
 }
+
+// ---------------------------------------------------------------------------
+// Task 4 — AC8: Object flags register as StringVar
+// ---------------------------------------------------------------------------
+
+// manifestWithObjectFlag returns a manifest with a single tool that has an
+// "object" type flag. Used for AC8/AC9/AC10/AC11 tests.
+func manifestWithObjectFlag() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "obj-toolkit",
+			Version:     "1.0.0",
+			Description: "Object flags toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "apply-edits",
+				Description: "Apply edits to a file",
+				Entrypoint:  "./apply-edits.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "edits",
+						Type:        "object",
+						Required:    true,
+						Description: "Edit operations to apply",
+						ItemSchema: map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"path":  map[string]any{"type": "string"},
+								"value": map[string]any{"type": "string"},
+							},
+							"required": []any{"path", "value"},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// manifestWithObjectArrayFlag returns a manifest with a single tool that has
+// an "object[]" type flag.
+func manifestWithObjectArrayFlag() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "objarray-toolkit",
+			Version:     "1.0.0",
+			Description: "Object array flags toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "batch-update",
+				Description: "Batch update resources",
+				Entrypoint:  "./batch-update.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "updates",
+						Type:        "object[]",
+						Required:    false,
+						Description: "List of update operations",
+						ItemSchema: map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id":     map[string]any{"type": "integer"},
+								"action": map[string]any{"type": "string"},
+							},
+							"required": []any{"id", "action"},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestGoCLI_Object_AC8_GoTypeObjectReturnsString(t *testing.T) {
+	// goType("object") must return "string" so the CLI accepts a JSON string.
+	// The current default case in goType returns "string", but the test
+	// verifies this is intentional for "object", not accidental.
+	got := goType("object")
+	assert.Equal(t, "string", got,
+		"goType(\"object\") must return \"string\" to accept JSON string at CLI level")
+}
+
+func TestGoCLI_Object_AC8_GoTypeObjectArrayReturnsString(t *testing.T) {
+	// goType("object[]") must return "string" (NOT "[]string") because the
+	// entire JSON array is passed as a single string flag, not as repeated
+	// --flag values.
+	got := goType("object[]")
+	assert.Equal(t, "string", got,
+		"goType(\"object[]\") must return \"string\" to accept JSON array string at CLI level")
+}
+
+func TestGoCLI_Object_AC8_TypeMapping(t *testing.T) {
+	// Table-driven test ensuring object types map correctly (Constitution 9).
+	tests := []struct {
+		name         string
+		manifestType string
+		wantGoType   string
+		wantCobra    string
+	}{
+		{
+			name:         "object maps to string/StringVar",
+			manifestType: "object",
+			wantGoType:   "string",
+			wantCobra:    "StringVar",
+		},
+		{
+			name:         "object[] maps to string/StringVar",
+			manifestType: "object[]",
+			wantGoType:   "string",
+			wantCobra:    "StringVar",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotType := goType(tc.manifestType)
+			assert.Equal(t, tc.wantGoType, gotType,
+				"goType(%q) must return %q", tc.manifestType, tc.wantGoType)
+
+			gotCobra := cobraFlagFunc(gotType)
+			assert.Equal(t, tc.wantCobra, gotCobra,
+				"cobraFlagFunc(%q) must return %q", gotType, tc.wantCobra)
+		})
+	}
+}
+
+func TestGoCLI_Object_AC8_ObjectFlagUsesStringVar(t *testing.T) {
+	// Generated code for type: "object" flag must use StringVar, not
+	// StringArrayVar or any other registration function.
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	assert.Contains(t, content, "StringVar",
+		"object flag must register with StringVar")
+	// Must NOT use StringArrayVar (which would be wrong for object).
+	assert.NotContains(t, content, "StringArrayVar",
+		"object flag must NOT use StringArrayVar — single JSON string, not repeated values")
+}
+
+func TestGoCLI_Object_AC8_ObjectArrayFlagUsesStringVar(t *testing.T) {
+	// Generated code for type: "object[]" flag must also use StringVar
+	// (the entire JSON array is a single string), NOT StringArrayVar.
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.Contains(t, content, "StringVar",
+		"object[] flag must register with StringVar")
+	assert.NotContains(t, content, "StringArrayVar",
+		"object[] flag must NOT use StringArrayVar — JSON array is passed as a single string")
+}
+
+func TestGoCLI_Object_AC8_ObjectFlagVarDeclaredAsString(t *testing.T) {
+	// The variable for an object flag must be declared as string, not []string.
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	// The var block should contain a string declaration for the edits flag.
+	// It should NOT contain a []string declaration for that flag.
+	// Check that the var declaration section does NOT have "[]string" for the
+	// edits flag. We look for the pattern: flagEdits []string (wrong) vs
+	// flagEdits string (correct).
+	assert.NotRegexp(t, `Flag[Ee]dits\s+\[\]string`, content,
+		"object flag var must be declared as string, not []string")
+}
+
+func TestGoCLI_Object_AC8_ObjectArrayFlagVarDeclaredAsString(t *testing.T) {
+	// The variable for an object[] flag must be declared as string, not []string.
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.NotRegexp(t, `Flag[Uu]pdates\s+\[\]string`, content,
+		"object[] flag var must be declared as string, not []string")
+}
+
+func TestGoCLI_Object_AC8_ObjectFlagNotTreatedAsArray(t *testing.T) {
+	// Even though "object[]" ends with "[]", the generated code must NOT
+	// treat it as an array flag (no range loop over string elements, no
+	// StringArrayVar). This catches a lazy implementation that checks
+	// strings.HasSuffix(type, "[]") to determine array behavior.
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	// The generated code should not have array-style element parsing
+	// (range over the flag value treating it as []string).
+	assert.NotContains(t, content, "element of --updates",
+		"object[] flag must not generate array-element parsing (it's a single JSON string)")
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — AC9: Generated CLI parses JSON for object flags
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_Object_AC9_ObjectFlagContainsJsonUnmarshal(t *testing.T) {
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	assert.Contains(t, content, "json.Unmarshal",
+		"object flag RunE must call json.Unmarshal to parse the JSON string")
+}
+
+func TestGoCLI_Object_AC9_ObjectArrayFlagContainsJsonUnmarshal(t *testing.T) {
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.Contains(t, content, "json.Unmarshal",
+		"object[] flag RunE must call json.Unmarshal to parse the JSON array string")
+}
+
+func TestGoCLI_Object_AC9_ObjectFlagImportsEncodingJson(t *testing.T) {
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	assert.Contains(t, content, `"encoding/json"`,
+		"tool file with object flag must import encoding/json")
+}
+
+func TestGoCLI_Object_AC9_JsonErrorFormat(t *testing.T) {
+	// The error message for invalid JSON must be user-friendly and include
+	// the flag name: "invalid JSON for --edits: <parse error>".
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	assert.Contains(t, content, "invalid JSON for --edits",
+		"JSON parse error must say 'invalid JSON for --edits'")
+}
+
+func TestGoCLI_Object_AC9_JsonErrorFormatObjectArray(t *testing.T) {
+	// Same user-friendly error for object[] flags.
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.Contains(t, content, "invalid JSON for --updates",
+		"JSON parse error for object[] must say 'invalid JSON for --updates'")
+}
+
+func TestGoCLI_Object_AC9_JsonErrorIncludesParseError(t *testing.T) {
+	// The error message template must include the actual parse error from
+	// json.Unmarshal (via %w or similar). We verify the format string
+	// contains a wrapping directive.
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	// The error format must wrap the underlying error (e.g., via %w or %v).
+	// A lazy implementation might hardcode a static message without the parse
+	// error detail. Check for "invalid JSON for --edits" followed by a format
+	// verb that includes the unmarshal error.
+	assert.Regexp(t, `invalid JSON for --edits.*%[wv]`, content,
+		"JSON error must wrap the underlying unmarshal error using %%w or %%v")
+}
+
+func TestGoCLI_Object_AC9_NoJsonImportWithoutObjectFlags(t *testing.T) {
+	// When there are no object flags, the tool file should NOT import
+	// encoding/json (it would be an unused import causing compile errors).
+	files := generateCLI(t, manifestWithArgsAndFlags())
+	content := fileContent(t, files, "internal/commands/upload.go")
+
+	assert.NotContains(t, content, `"encoding/json"`,
+		"tool file without object flags must not import encoding/json")
+}
+
+func TestGoCLI_Object_AC9_MultipleFlagTypes_OnlyObjectGetsJsonParsing(t *testing.T) {
+	// A tool with both object and string flags: only the object flag gets
+	// json.Unmarshal. The string flag should NOT have JSON parsing.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "mixed-flag-toolkit",
+			Version:     "1.0.0",
+			Description: "Mixed flags toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "mixed-tool",
+				Description: "A tool with mixed flag types",
+				Entrypoint:  "./mixed.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "config",
+						Type:        "object",
+						Description: "Configuration object",
+					},
+					{
+						Name:        "name",
+						Type:        "string",
+						Description: "A plain string",
+					},
+				},
+			},
+		},
+	}
+
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/mixed-tool.go")
+
+	// JSON parsing must be present (for the object flag).
+	assert.Contains(t, content, "json.Unmarshal",
+		"mixed tool with object flag must have json.Unmarshal")
+	// Error must reference --config (the object flag), not --name.
+	assert.Contains(t, content, "invalid JSON for --config",
+		"JSON error must reference the object flag name --config")
+	assert.NotContains(t, content, "invalid JSON for --name",
+		"string flag --name must NOT have JSON parsing")
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — AC10: Generated CLI validates against itemSchema
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_Object_AC10_ItemSchemaPresent_GeneratesValidation(t *testing.T) {
+	// When itemSchema is present, the generated code must include validation
+	// code *in the RunE body* (not just MarkFlagRequired). The validation
+	// must check parsed JSON keys against the schema.
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	// The generated validation must check for missing required keys in the
+	// parsed JSON. The word "required" in MarkFlagRequired is NOT sufficient --
+	// that only makes the flag itself required, not its content valid.
+	// We look for validation that references a specific property name from the
+	// itemSchema ("path" or "value") in a validation context (error message or
+	// check), distinct from MarkFlagRequired.
+	assert.True(t,
+		strings.Contains(content, `"path"`) && strings.Contains(content, `"value"`),
+		"object flag with itemSchema must generate validation that checks required properties 'path' and 'value'")
+}
+
+func TestGoCLI_Object_AC10_ValidationReferencesRequiredFields(t *testing.T) {
+	// The generated validation must reference the required fields from the
+	// itemSchema: "path" and "value".
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	assert.Contains(t, content, "path",
+		"validation must reference required field 'path' from itemSchema")
+	assert.Contains(t, content, "value",
+		"validation must reference required field 'value' from itemSchema")
+}
+
+func TestGoCLI_Object_AC10_ValidationErrorReferencesFlagName(t *testing.T) {
+	// Schema validation errors must reference the flag name so the user knows
+	// which flag has the problem.
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	assert.Contains(t, content, "--edits",
+		"schema validation error must reference the flag name '--edits'")
+}
+
+func TestGoCLI_Object_AC10_ObjectArrayValidationReferencesFlag(t *testing.T) {
+	// For object[] with itemSchema, validation errors must also reference the
+	// flag name.
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.Contains(t, content, "--updates",
+		"object[] schema validation error must reference the flag name '--updates'")
+}
+
+func TestGoCLI_Object_AC10_NoItemSchema_NoValidation(t *testing.T) {
+	// When itemSchema is absent, no schema validation code should be generated.
+	// Only json.Unmarshal should remain.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "noschema-toolkit",
+			Version:     "1.0.0",
+			Description: "No schema toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "freeform",
+				Description: "Accept any JSON",
+				Entrypoint:  "./freeform.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "data",
+						Type:        "object",
+						Description: "Arbitrary JSON data",
+						// No ItemSchema.
+					},
+				},
+			},
+		},
+	}
+
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/freeform.go")
+
+	// json.Unmarshal should still be present (AC9).
+	assert.Contains(t, content, "json.Unmarshal",
+		"object flag without itemSchema must still parse JSON")
+	// But no schema-specific validation (no required field checks, etc).
+	// We verify by looking for the absence of required field names that would
+	// only appear if validation was generated. A lazy implementation might
+	// always emit validation even without itemSchema.
+	assert.NotContains(t, content, "required field",
+		"object flag without itemSchema must not generate required-field validation")
+}
+
+func TestGoCLI_Object_AC10_ObjectArrayItemSchemaValidatesRequiredFields(t *testing.T) {
+	// For object[] with itemSchema that has required: ["id", "action"],
+	// the generated code must validate those required fields.
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.Contains(t, content, "id",
+		"object[] validation must reference required field 'id' from itemSchema")
+	assert.Contains(t, content, "action",
+		"object[] validation must reference required field 'action' from itemSchema")
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — AC11: CLI --help shows JSON hint
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_Object_AC11_ObjectFlagDescriptionMentionsJSON(t *testing.T) {
+	// For object flags, the generated flag description/usage must mention
+	// "JSON" so the user knows the flag expects JSON input.
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	// The description string registered with Cobra must contain "JSON".
+	// Look for the pattern in the StringVar call. The description is the last
+	// string argument to StringVar.
+	assert.Regexp(t, `(?i)StringVar.*edits.*JSON`, content,
+		"object flag registration must include 'JSON' in the description/usage hint")
+}
+
+func TestGoCLI_Object_AC11_ObjectArrayFlagDescriptionMentionsJSON(t *testing.T) {
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.Regexp(t, `(?i)StringVar.*updates.*JSON`, content,
+		"object[] flag registration must include 'JSON' in the description/usage hint")
+}
+
+func TestGoCLI_Object_AC11_ItemSchemaPropertiesSummarized(t *testing.T) {
+	// When itemSchema has properties, the generated description should include
+	// a summary of the expected keys. For the edits flag, itemSchema has
+	// properties: path, value. The description must mention these.
+	files := generateCLI(t, manifestWithObjectFlag())
+	content := fileContent(t, files, "internal/commands/apply-edits.go")
+
+	// The description must mention the property names from itemSchema.
+	assert.Contains(t, content, "path",
+		"object flag description must summarize itemSchema property 'path'")
+	assert.Contains(t, content, "value",
+		"object flag description must summarize itemSchema property 'value'")
+}
+
+func TestGoCLI_Object_AC11_ObjectArrayItemSchemaPropertiesSummarized(t *testing.T) {
+	files := generateCLI(t, manifestWithObjectArrayFlag())
+	content := fileContent(t, files, "internal/commands/batch-update.go")
+
+	assert.Contains(t, content, "id",
+		"object[] flag description must summarize itemSchema property 'id'")
+	assert.Contains(t, content, "action",
+		"object[] flag description must summarize itemSchema property 'action'")
+}
+
+func TestGoCLI_Object_AC11_NoItemSchema_DescriptionStillShowsJSON(t *testing.T) {
+	// Even without itemSchema, the description must still mention "JSON".
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "noschema-hint",
+			Version:     "1.0.0",
+			Description: "No schema hint",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "loose",
+				Description: "Accepts loose JSON",
+				Entrypoint:  "./loose.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "payload",
+						Type:        "object",
+						Description: "Request payload",
+					},
+				},
+			},
+		},
+	}
+
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/loose.go")
+
+	assert.Regexp(t, `(?i)StringVar.*payload.*JSON`, content,
+		"object flag without itemSchema must still show JSON hint in description")
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — Cross-cutting edge cases
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_Object_BothObjectAndObjectArray_SameTool(t *testing.T) {
+	// A tool with both "object" and "object[]" flags must handle both correctly.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "dual-object-toolkit",
+			Version:     "1.0.0",
+			Description: "Both object and object[] flags",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "dual",
+				Description: "Dual object tool",
+				Entrypoint:  "./dual.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "single",
+						Type:        "object",
+						Description: "A single object",
+					},
+					{
+						Name:        "multi",
+						Type:        "object[]",
+						Description: "An array of objects",
+					},
+				},
+			},
+		},
+	}
+
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/dual.go")
+
+	// Both flags should use StringVar.
+	// Count occurrences of StringVar — should appear at least twice (once per object flag).
+	count := strings.Count(content, "StringVar")
+	assert.GreaterOrEqual(t, count, 2,
+		"both object and object[] flags must each use StringVar (found %d occurrences)", count)
+
+	// Both should have JSON parsing.
+	assert.Contains(t, content, "invalid JSON for --single",
+		"single object flag must have JSON error handling")
+	assert.Contains(t, content, "invalid JSON for --multi",
+		"object[] flag must have JSON error handling")
+
+	// Neither should use StringArrayVar.
+	assert.NotContains(t, content, "StringArrayVar",
+		"neither object nor object[] flags should use StringArrayVar")
+}
+
+func TestGoCLI_Object_SpecialCharsInDescription_Escaped(t *testing.T) {
+	// Constitution 25a: manifest-supplied values must be escaped at the string
+	// literal boundary. Test that an object flag with special characters in its
+	// description does not break the generated code.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "escape-toolkit",
+			Version:     "1.0.0",
+			Description: "Escape test",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "escape-tool",
+				Description: "Test escaping",
+				Entrypoint:  "./escape.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "config",
+						Type:        "object",
+						Description: `Config with "quotes" and\nbackslash`,
+						ItemSchema: map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"key": map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// The generation must not error even with special characters.
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/escape-tool.go")
+
+	// The generated code must still be valid (no raw unescaped quotes that
+	// would break the Go string literal).
+	assert.Contains(t, content, "json.Unmarshal",
+		"object flag with special chars in description must still generate JSON parsing")
+	// The raw quote should be escaped.
+	assert.NotContains(t, content, `Config with "quotes"`,
+		"description with double quotes must be escaped in generated Go string literal")
+}
+
+func TestGoCLI_Object_BuildToolData_SetsObjectFlagFields(t *testing.T) {
+	// buildToolData must set IsObject and HasItemSchema fields on flagData
+	// for object/object[] types so templates can conditionally emit code.
+	m := manifestWithObjectFlag()
+	tool := m.Tools[0]
+	auth := m.ResolvedAuth(tool)
+	data := buildToolData(m, tool, auth)
+
+	require.Len(t, data.Flags, 1, "must have exactly one flag")
+	flag := data.Flags[0]
+
+	assert.Equal(t, "edits", flag.Name,
+		"flag name must be 'edits'")
+	assert.Equal(t, "string", flag.GoType,
+		"object flag GoType must be 'string'")
+	// Object flags should NOT be treated as array flags.
+	assert.False(t, flag.IsArray,
+		"object flag IsArray must be false")
+}
+
+func TestGoCLI_Object_BuildToolData_ObjectArrayNotTreatedAsArrayFlag(t *testing.T) {
+	// object[] should NOT set IsArray=true (unlike string[], int[], etc).
+	// It is a single JSON string containing an array, not a repeated CLI flag.
+	m := manifestWithObjectArrayFlag()
+	tool := m.Tools[0]
+	auth := m.ResolvedAuth(tool)
+	data := buildToolData(m, tool, auth)
+
+	require.Len(t, data.Flags, 1, "must have exactly one flag")
+	flag := data.Flags[0]
+
+	assert.Equal(t, "updates", flag.Name,
+		"flag name must be 'updates'")
+	assert.Equal(t, "string", flag.GoType,
+		"object[] flag GoType must be 'string'")
+	assert.False(t, flag.IsArray,
+		"object[] flag IsArray must be false — it is a single JSON string, not a repeated flag")
+}
+
+func TestGoCLI_Object_AC8_HasNonStringArrayFlags_NotSetForObjectArray(t *testing.T) {
+	// The HasNonStringArrayFlags field triggers strconv import. Object[] flags
+	// should NOT trigger it (they use encoding/json, not strconv).
+	m := manifestWithObjectArrayFlag()
+	tool := m.Tools[0]
+	auth := m.ResolvedAuth(tool)
+	data := buildToolData(m, tool, auth)
+
+	assert.False(t, data.HasNonStringArrayFlags,
+		"object[] flag must not set HasNonStringArrayFlags (no strconv parsing)")
+}
