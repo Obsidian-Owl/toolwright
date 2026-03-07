@@ -12,7 +12,17 @@ import (
 )
 
 // validToolName matches tool names safe for use in identifiers and file paths.
+// Security boundary: this regex also prevents injection into generated source
+// code string literals and exec.Command arguments. Do not relax without
+// reviewing all template interpolation points that use tool names.
 var validToolName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+
+// escStringLiteral escapes a string for safe interpolation inside a
+// double-quoted Go or JavaScript/TypeScript string literal.
+func escStringLiteral(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`)
+	return r.Replace(s)
+}
 
 // GoCLIGenerator generates Go CLI projects using Cobra.
 type GoCLIGenerator struct{}
@@ -189,17 +199,17 @@ type argData struct {
 }
 
 type toolGoData struct {
-	ToolkitName         string
-	ToolName            string // original name used in string literals (e.g., "check-health")
-	GoName              string // sanitized Go identifier (e.g., "checkHealth")
-	Description         string
-	Args                []argData
-	Flags               []flagData
-	HasAuth             bool
-	AuthType            string
-	TokenEnv            string
-	TokenFlag           string
-	HasNonStringArgs    bool // true if any arg needs strconv parsing
+	ToolkitName            string
+	ToolName               string // original name used in string literals (e.g., "check-health")
+	GoName                 string // sanitized Go identifier (e.g., "checkHealth")
+	Description            string
+	Args                   []argData
+	Flags                  []flagData
+	HasAuth                bool
+	AuthType               string
+	TokenEnv               string
+	TokenFlag              string
+	HasNonStringArgs       bool // true if any arg needs strconv parsing
 	HasNonStringArrayFlags bool // true if any flag is a non-string array type needing strconv
 }
 
@@ -355,6 +365,14 @@ func renderTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"formatDefault":      formatDefault,
 		"formatArrayDefault": formatArrayDefault,
 		"joinStrings":        strings.Join,
+		"esc":                escStringLiteral,
+		"joinEsc": func(elems []string, sep string) string {
+			escaped := make([]string, len(elems))
+			for i, e := range elems {
+				escaped[i] = escStringLiteral(e)
+			}
+			return strings.Join(escaped, sep)
+		},
 		"isStringBase": func(base string) bool {
 			return base == "string"
 		},
@@ -474,13 +492,13 @@ type toolInfo struct {
 // registry is the embedded list of tools from the manifest.
 var registry = []toolInfo{
 {{- range .Tools}}
-	{Name: "{{.Name}}", Description: "{{.Description}}"},
+	{Name: "{{.Name}}", Description: "{{.Description | esc}}"},
 {{- end}}
 }
 
 var rootCmd = &cobra.Command{
 	Use:   "{{.ToolkitName}}",
-	Short: "{{.ToolkitDescription}}",
+	Short: "{{.ToolkitDescription | esc}}",
 }
 
 var listJSON bool
@@ -569,24 +587,24 @@ var (
 func init() {
 {{- range .Flags}}
 {{- if .IsArray}}
-	{{$goName}}Cmd.Flags().StringArrayVar(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatArrayDefault .Default (isStringBase .ArrayBase)}}, "{{.Description}}")
+	{{$goName}}Cmd.Flags().StringArrayVar(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatArrayDefault .Default (isStringBase .ArrayBase)}}, "{{.Description | esc}}")
 {{- else}}
-	{{$goName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description}}{{if .Enum}} (allowed: {{joinStrings .Enum ", "}}){{end}}")
+	{{$goName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description | esc}}{{if .Enum}} (allowed: {{joinEsc .Enum ", "}}){{end}}")
 {{- end}}
 {{- if .Required}}
 	_ = {{$goName}}Cmd.MarkFlagRequired("{{.Name}}")
 {{- end}}
 {{- end}}
 {{- if $hasAuth}}
-	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv}} env var)")
+	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv | esc}} env var)")
 {{- end}}
 	rootCmd.AddCommand({{$goName}}Cmd)
 }
 
 var {{.GoName}}Cmd = &cobra.Command{
 	Use:   "{{.ToolName}}{{range .Args}} <{{.Name}}>{{end}}",
-	Short: "{{.Description}}",
-	Long:  "{{.Description}}",
+	Short: "{{.Description | esc}}",
+	Long:  "{{.Description | esc}}",
 {{- if .Args}}
 	Args:  cobra.MinimumNArgs({{len .Args}}),
 {{- end}}
@@ -651,10 +669,10 @@ var {{.GoName}}Cmd = &cobra.Command{
 		// Resolve auth token: prefer flag, fall back to env var.
 		token := {{$goName}}Token
 		if token == "" {
-			token = os.Getenv("{{$tokenEnv}}")
+			token = os.Getenv("{{$tokenEnv | esc}}")
 		}
 		if token == "" {
-			return fmt.Errorf("auth required: set {{$tokenEnv}} or pass --{{$tokenFlag}}")
+			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag}}")
 		}
 		_ = token // passed to the entrypoint via environment
 {{- end}}

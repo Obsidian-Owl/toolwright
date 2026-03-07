@@ -1196,8 +1196,8 @@ func TestGoCLI_AC8_ArrayFlagsUseStringArrayVar(t *testing.T) {
 				APIVersion: "toolwright/v1",
 				Kind:       "Toolkit",
 				Metadata: manifest.Metadata{
-					Name:    "array-toolkit",
-					Version: "1.0.0",
+					Name:        "array-toolkit",
+					Version:     "1.0.0",
 					Description: "Array flags toolkit",
 				},
 				Tools: []manifest.Tool{

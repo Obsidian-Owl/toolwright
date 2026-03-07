@@ -301,6 +301,14 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 	funcMap := template.FuncMap{
 		"joinStrings": strings.Join,
 		"tsType":      tsType,
+		"esc":         escStringLiteral,
+		"joinEsc": func(elems []string, sep string) string {
+			escaped := make([]string, len(elems))
+			for i, e := range elems {
+				escaped[i] = escStringLiteral(e)
+			}
+			return strings.Join(escaped, sep)
+		},
 	}
 	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
 	if err != nil {
@@ -376,10 +384,10 @@ import { validateRequest } from "../auth/middleware.js";
 // Input schema for {{.ToolName}}
 const inputSchema = z.object({
 {{- range .Args}}
-  {{.Name}}: z.{{.TSType}}().describe("{{.Description}}"),{{if not .Required}}// optional{{end}}
+  {{.Name}}: z.{{.TSType}}().describe("{{.Description | esc}}"),{{if not .Required}}// optional{{end}}
 {{- end}}
 {{- range .Flags}}
-  {{.Name}}: {{.ZodType}}{{if not .Required}}.optional(){{end}}.describe("{{.Description}}"),
+  {{.Name}}: {{.ZodType}}{{if not .Required}}.optional(){{end}}.describe("{{.Description | esc}}"),
 {{- end}}
 });
 
@@ -392,9 +400,9 @@ type {{.ToolName}}Input = z.infer<typeof inputSchema>;
 async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ content: Array<{ type: string; text: string }> }> {
 {{- if .HasAuth}}
   // Resolve auth: read from environment variable {{.TokenEnv}}
-  const envToken = process.env["{{.TokenEnv}}"];
+  const envToken = process.env["{{.TokenEnv | esc}}"];
   if (!envToken) {
-    throw new Error("auth required: set the {{.TokenEnv}} environment variable");
+    throw new Error("auth required: set the {{.TokenEnv | esc}} environment variable");
   }
 {{- end}}
 {{- range .Args}}
@@ -415,7 +423,7 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
 export function register(server: McpServer): void {
   server.tool(
     "{{.ToolName}}",
-    "{{.Description}}",
+    "{{.Description | esc}}",
     inputSchema.shape,
     async (input: {{.ToolName}}Input) => {
       return handle_{{.ToolName}}(input);
@@ -442,7 +450,7 @@ interface ToolEntry {
 // Registry of all available tools with their names and descriptions
 const toolRegistry: ToolEntry[] = [
 {{- range .Tools}}
-  { name: "{{.Name}}", description: "{{.Description}}" },
+  { name: "{{.Name}}", description: "{{.Description | esc}}" },
 {{- end}}
 ];
 
@@ -616,8 +624,8 @@ const metadataTSTmpl = `import { IncomingMessage, ServerResponse } from "node:ht
 
 const protectedResourceMetadata = {
   resource: process.env["RESOURCE_URL"] ?? "{{.ProviderURL}}",
-  authorization_servers: ["{{.ProviderURL}}"],
-  scopes_supported: [{{range $i, $s := .Scopes}}{{if $i}}, {{end}}"{{$s}}"{{end}}],
+  authorization_servers: ["{{.ProviderURL | esc}}"],
+  scopes_supported: [{{range $i, $s := .Scopes}}{{if $i}}, {{end}}"{{$s | esc}}"{{end}}],
   bearer_methods_supported: ["header"],
 };
 
