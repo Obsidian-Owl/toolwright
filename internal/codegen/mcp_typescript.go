@@ -137,6 +137,7 @@ type tsArgData struct {
 type tsFlagData struct {
 	Name        string
 	TSType      string
+	ZodType     string
 	Required    bool
 	Description string
 }
@@ -182,6 +183,9 @@ type metadataTSData struct {
 
 // tsType maps a manifest type string to a TypeScript type string.
 func tsType(manifestType string) string {
+	if manifest.IsArrayType(manifestType) {
+		return tsType(manifest.BaseType(manifestType)) + "[]"
+	}
 	switch manifestType {
 	case "int", "float":
 		return "number"
@@ -189,6 +193,21 @@ func tsType(manifestType string) string {
 		return "boolean"
 	default:
 		return "string"
+	}
+}
+
+// zodType maps a manifest type string to a Zod schema expression string.
+func zodType(manifestType string) string {
+	if manifest.IsArrayType(manifestType) {
+		return "z.array(" + zodType(manifest.BaseType(manifestType)) + ")"
+	}
+	switch manifestType {
+	case "int", "float":
+		return "z.number()"
+	case "bool":
+		return "z.boolean()"
+	default:
+		return "z.string()"
 	}
 }
 
@@ -232,6 +251,7 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
 		flags[i] = tsFlagData{
 			Name:        f.Name,
 			TSType:      tsType(f.Type),
+			ZodType:     zodType(f.Type),
 			Required:    f.Required,
 			Description: f.Description,
 		}
@@ -359,7 +379,7 @@ const inputSchema = z.object({
   {{.Name}}: z.{{.TSType}}().describe("{{.Description}}"),{{if not .Required}}// optional{{end}}
 {{- end}}
 {{- range .Flags}}
-  {{.Name}}: z.{{.TSType}}(){{if not .Required}}.optional(){{end}}.describe("{{.Description}}"),
+  {{.Name}}: {{.ZodType}}{{if not .Required}}.optional(){{end}}.describe("{{.Description}}"),
 {{- end}}
 });
 
