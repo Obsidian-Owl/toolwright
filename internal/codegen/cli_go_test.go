@@ -1148,3 +1148,445 @@ func TestGoCLI_EmptyToolsSlice(t *testing.T) {
 	assertNoFile(t, files, "internal/auth/resolver.go")
 	assertNoFile(t, files, "internal/commands/login.go")
 }
+
+// ---------------------------------------------------------------------------
+// AC-7: goType maps array types
+// ---------------------------------------------------------------------------
+
+func TestGoType_ArrayTypes(t *testing.T) {
+	tests := []struct {
+		manifestType string
+		wantGoType   string
+	}{
+		{manifestType: "string[]", wantGoType: "[]string"},
+		{manifestType: "int[]", wantGoType: "[]int"},
+		{manifestType: "float[]", wantGoType: "[]float64"},
+		{manifestType: "bool[]", wantGoType: "[]bool"},
+		// Scalar types still work.
+		{manifestType: "string", wantGoType: "string"},
+		{manifestType: "int", wantGoType: "int"},
+		{manifestType: "float", wantGoType: "float64"},
+		{manifestType: "bool", wantGoType: "bool"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.manifestType, func(t *testing.T) {
+			assert.Equal(t, tc.wantGoType, goType(tc.manifestType))
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-8: Generated CLI registers array flags as StringArrayVar
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_AC8_ArrayFlagsUseStringArrayVar(t *testing.T) {
+	tests := []struct {
+		name         string
+		manifestType string
+	}{
+		{name: "string[] uses StringArrayVar", manifestType: "string[]"},
+		{name: "int[] uses StringArrayVar", manifestType: "int[]"},
+		{name: "float[] uses StringArrayVar", manifestType: "float[]"},
+		{name: "bool[] uses StringArrayVar", manifestType: "bool[]"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name:    "array-toolkit",
+					Version: "1.0.0",
+					Description: "Array flags toolkit",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:        "array-tool",
+						Description: "A tool with array flags",
+						Entrypoint:  "./array-tool.sh",
+						Auth:        &manifest.Auth{Type: "none"},
+						Flags: []manifest.Flag{
+							{
+								Name:        "items",
+								Type:        tc.manifestType,
+								Required:    false,
+								Description: "list of items",
+							},
+						},
+					},
+				},
+			}
+			files := generateCLI(t, m)
+			content := fileContent(t, files, "internal/commands/array-tool.go")
+			assert.Contains(t, content, "StringArrayVar",
+				"flag type %q must register with StringArrayVar", tc.manifestType)
+		})
+	}
+}
+
+func TestGoCLI_AC8_ArrayFlagVarDeclaredAsStringSlice(t *testing.T) {
+	// The var declaration for an array flag must be []string (all array types
+	// are stored as []string and parsed at runtime).
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "array-decl-toolkit",
+			Version:     "1.0.0",
+			Description: "Array declaration toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "multi",
+				Description: "Multi-value tool",
+				Entrypoint:  "./multi.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{Name: "tags", Type: "string[]", Description: "tag list"},
+					{Name: "counts", Type: "int[]", Description: "count list"},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/multi.go")
+	// All array flags are stored as []string.
+	assert.Contains(t, content, "[]string", "array flag vars must be declared as []string")
+}
+
+// ---------------------------------------------------------------------------
+// AC-9: Generated CLI handles array defaults
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_AC9_StringArrayDefaultValues(t *testing.T) {
+	// A string[] flag with a default ["a", "b"] must produce []string{"a", "b"}.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "strarray-default",
+			Version:     "1.0.0",
+			Description: "String array default toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "strarray",
+				Description: "String array tool",
+				Entrypoint:  "./strarray.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "tags",
+						Type:        "string[]",
+						Default:     []interface{}{"a", "b"},
+						Description: "tag list",
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/strarray.go")
+	assert.Contains(t, content, `[]string{"a", "b"}`,
+		"string[] flag with default [\"a\", \"b\"] must generate []string{\"a\", \"b\"}")
+}
+
+func TestGoCLI_AC9_NonStringArrayDefaultIsEmpty(t *testing.T) {
+	// Non-string array types with a default emit []string{} (parse at runtime).
+	tests := []struct {
+		manifestType string
+		defaultVal   []interface{}
+	}{
+		{manifestType: "int[]", defaultVal: []interface{}{1, 2}},
+		{manifestType: "float[]", defaultVal: []interface{}{1.5, 2.5}},
+		{manifestType: "bool[]", defaultVal: []interface{}{true, false}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.manifestType, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name:        "nonstr-default",
+					Version:     "1.0.0",
+					Description: "Non-string array default toolkit",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:        "nonstr",
+						Description: "Non-string array tool",
+						Entrypoint:  "./nonstr.sh",
+						Auth:        &manifest.Auth{Type: "none"},
+						Flags: []manifest.Flag{
+							{
+								Name:        "values",
+								Type:        tc.manifestType,
+								Default:     tc.defaultVal,
+								Description: "value list",
+							},
+						},
+					},
+				},
+			}
+			files := generateCLI(t, m)
+			content := fileContent(t, files, "internal/commands/nonstr.go")
+			assert.Contains(t, content, "[]string{}",
+				"non-string array type %q with default must generate []string{}", tc.manifestType)
+		})
+	}
+}
+
+func TestGoCLI_AC9_ArrayFlagNoDefaultIsNil(t *testing.T) {
+	// An array flag with no default must not set a default (nil / omitted).
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "nodefault-toolkit",
+			Version:     "1.0.0",
+			Description: "No default toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "nodefault",
+				Description: "No default tool",
+				Entrypoint:  "./nodefault.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "tags",
+						Type:        "string[]",
+						Description: "tag list",
+						// Default is nil / omitted.
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/nodefault.go")
+	// No literal default should appear for this flag.
+	assert.NotContains(t, content, `[]string{"`,
+		"array flag with no default must not emit a non-empty default literal")
+}
+
+// ---------------------------------------------------------------------------
+// AC-10: Generated CLI parses non-string array elements
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_AC10_IntArrayParsingInRunE(t *testing.T) {
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "int-array-toolkit",
+			Version:     "1.0.0",
+			Description: "Int array toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "counter",
+				Description: "Counter tool",
+				Entrypoint:  "./counter.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "counts",
+						Type:        "int[]",
+						Description: "list of counts",
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/counter.go")
+	// RunE must contain parsing code for int[] — strconv.Atoi per element.
+	assert.Contains(t, content, "strconv",
+		"int[] flag must import strconv for runtime parsing")
+	assert.Contains(t, content, "Atoi",
+		"int[] flag RunE must use strconv.Atoi to parse elements")
+	// User-friendly error message.
+	assert.Contains(t, content, "not a valid int",
+		"int[] parsing error must say 'not a valid int'")
+	assert.Contains(t, content, "--counts",
+		"int[] parsing error must name the flag '--counts'")
+}
+
+func TestGoCLI_AC10_FloatArrayParsingInRunE(t *testing.T) {
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "float-array-toolkit",
+			Version:     "1.0.0",
+			Description: "Float array toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "floater",
+				Description: "Floater tool",
+				Entrypoint:  "./floater.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "weights",
+						Type:        "float[]",
+						Description: "list of weights",
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/floater.go")
+	assert.Contains(t, content, "strconv",
+		"float[] flag must import strconv for runtime parsing")
+	assert.Contains(t, content, "ParseFloat",
+		"float[] flag RunE must use strconv.ParseFloat to parse elements")
+	assert.Contains(t, content, "not a valid float",
+		"float[] parsing error must say 'not a valid float'")
+	assert.Contains(t, content, "--weights",
+		"float[] parsing error must name the flag '--weights'")
+}
+
+func TestGoCLI_AC10_BoolArrayParsingInRunE(t *testing.T) {
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "bool-array-toolkit",
+			Version:     "1.0.0",
+			Description: "Bool array toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "toggler",
+				Description: "Toggler tool",
+				Entrypoint:  "./toggler.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "flags",
+						Type:        "bool[]",
+						Description: "list of boolean flags",
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/toggler.go")
+	assert.Contains(t, content, "strconv",
+		"bool[] flag must import strconv for runtime parsing")
+	assert.Contains(t, content, "ParseBool",
+		"bool[] flag RunE must use strconv.ParseBool to parse elements")
+	assert.Contains(t, content, "not a valid bool",
+		"bool[] parsing error must say 'not a valid bool'")
+	assert.Contains(t, content, "--flags",
+		"bool[] parsing error must name the flag '--flags'")
+}
+
+func TestGoCLI_AC10_StringArrayNoParsingInRunE(t *testing.T) {
+	// string[] must NOT generate strconv parsing — values are used directly.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "strarray-noparse",
+			Version:     "1.0.0",
+			Description: "String array no-parse toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "strtool",
+				Description: "String array tool",
+				Entrypoint:  "./strtool.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "names",
+						Type:        "string[]",
+						Description: "list of names",
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/strtool.go")
+	// string[] should not produce strconv parsing (values used directly).
+	assert.NotContains(t, content, "strconv",
+		"string[] flag must not import strconv (no parsing needed)")
+}
+
+func TestGoCLI_AC10_EmptyArrayProducesNoParseError(t *testing.T) {
+	// The generated parse loop must handle an empty slice without errors.
+	// This is verified structurally: the loop must use a range over the slice,
+	// which produces zero iterations for an empty slice.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "empty-array-toolkit",
+			Version:     "1.0.0",
+			Description: "Empty array toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "empty-counter",
+				Description: "Empty counter tool",
+				Entrypoint:  "./counter.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "counts",
+						Type:        "int[]",
+						Description: "list of counts",
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/empty-counter.go")
+	// The loop must use range so it is a no-op for empty slices.
+	assert.Contains(t, content, "range",
+		"int[] parse loop must use range (handles empty slice correctly)")
+}
+
+func TestGoCLI_AC10_ArrayParseErrorFormat(t *testing.T) {
+	// Error format: invalid value "abc" for element of --counts: not a valid int
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "errfmt-toolkit",
+			Version:     "1.0.0",
+			Description: "Error format toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "errfmt",
+				Description: "Error format tool",
+				Entrypoint:  "./errfmt.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "counts",
+						Type:        "int[]",
+						Description: "list of counts",
+					},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/errfmt.go")
+	// The error must reference the flag name and "element of".
+	assert.Contains(t, content, "element of",
+		"array parse error must say 'element of'")
+	assert.Contains(t, content, "invalid value",
+		"array parse error must say 'invalid value'")
+}
