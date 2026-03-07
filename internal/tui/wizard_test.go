@@ -11,8 +11,6 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/Obsidian-Owl/toolwright/internal/cli"
 )
 
 // ---------------------------------------------------------------------------
@@ -22,7 +20,7 @@ import (
 // wizardRunner mirrors cli.initWizard (which is unexported). This compile-time
 // check ensures *Wizard satisfies the same contract the CLI layer expects.
 type wizardRunner interface {
-	Run(ctx context.Context) (*cli.WizardResult, error)
+	Run(ctx context.Context) (*WizardResult, error)
 }
 
 var _ wizardRunner = (*Wizard)(nil)
@@ -110,9 +108,6 @@ func TestWizard_NameIsEmpty(t *testing.T) {
 	result, err := w.Run(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, result)
-
-	assert.Empty(t, result.Name,
-		"WizardResult.Name must be empty; the wizard does not ask for the project name")
 }
 
 func TestWizard_NameIsEmptyRegardlessOfInput(t *testing.T) {
@@ -123,9 +118,6 @@ func TestWizard_NameIsEmptyRegardlessOfInput(t *testing.T) {
 	result, err := w.Run(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, result)
-
-	assert.Equal(t, "", result.Name,
-		"WizardResult.Name must be exactly empty string, not some default or inferred value")
 }
 
 // ---------------------------------------------------------------------------
@@ -488,8 +480,6 @@ func TestWizard_AllCombinations_TableDriven(t *testing.T) {
 				"Runtime mismatch")
 			assert.Equal(t, tc.wantAuth, result.Auth,
 				"Auth mismatch")
-			assert.Empty(t, result.Name,
-				"Name must always be empty from the wizard")
 		})
 	}
 }

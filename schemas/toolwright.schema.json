@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Obsidian-Owl/toolwright/schemas/toolwright.schema.json",
+  "title": "Toolwright Manifest",
+  "description": "JSON Schema for the toolwright manifest format (toolwright/v1 Toolkit).",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "tools"],
+  "properties": {
+    "apiVersion": {
+      "const": "toolwright/v1"
+    },
+    "kind": {
+      "const": "Toolkit"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version", "description"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "entrypoint"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" },
+                "required": { "type": "boolean" },
+                "description": { "type": "string" }
+              }
+            }
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" },
+                "required": { "type": "boolean" },
+                "default": {},
+                "enum": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "description": { "type": "string" }
+              }
+            }
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "format": { "type": "string" },
+              "schema": { "type": "string" }
+            }
+          },
+          "auth": {
+            "$ref": "#/$defs/auth"
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "description": { "type": "string" },
+                "args": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "flags": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                }
+              }
+            }
+          },
+          "exit_codes": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        }
+      }
+    },
+    "auth": {
+      "$ref": "#/$defs/auth"
+    },
+    "generate": {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "object",
+          "properties": {
+            "target": { "type": "string" }
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "properties": {
+            "target": { "type": "string" },
+            "transport": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "auth": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["none", "token", "oauth2"]
+        },
+        "token_env": { "type": "string" },
+        "token_flag": { "type": "string" },
+        "token_header": { "type": "string" },
+        "provider_url": { "type": "string" },
+        "client_id": { "type": "string" },
+        "endpoints": {
+          "type": "object",
+          "properties": {
+            "authorization": { "type": "string" },
+            "token": { "type": "string" },
+            "jwks": { "type": "string" }
+          }
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "audience": { "type": "string" }
+      }
+    }
+  }
+}

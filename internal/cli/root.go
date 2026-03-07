@@ -36,7 +36,7 @@ func NewRootCommand() *cobra.Command {
 				errMsg = "no command provided"
 			}
 
-			err := fmt.Errorf("%s", errMsg) //nolint:err113 // dynamic usage error, not a sentinel
+			err := &UsageError{Err: fmt.Errorf("%s", errMsg)} //nolint:err113 // dynamic usage error, not a sentinel
 
 			if jsonMode {
 				_ = outputError(cmd.OutOrStdout(), errCode, errMsg, fmt.Sprintf("run '%s --help' for usage", cmd.CommandPath()))
@@ -58,10 +58,10 @@ func NewRootCommand() *cobra.Command {
 func loadManifest(path string) (*manifest.Toolkit, error) {
 	tk, err := manifest.ParseFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("loading manifest %s: %w", path, err)
+		return nil, &IOError{Err: fmt.Errorf("loading manifest %s: %w", path, err)}
 	}
 	if tk == nil {
-		return nil, fmt.Errorf("loading manifest %s: empty file", path)
+		return nil, &IOError{Err: fmt.Errorf("loading manifest %s: empty file", path)}
 	}
 	return tk, nil
 }

@@ -49,7 +49,7 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 
 	// Require exactly one positional argument: the tool name.
 	if len(args) == 0 {
-		err := fmt.Errorf("requires tool name: run 'toolwright login <tool-name>'")
+		err := &UsageError{Err: fmt.Errorf("requires tool name: run 'toolwright login <tool-name>'")}
 		if jsonMode {
 			_ = outputError(cmd.OutOrStdout(), "usage_error", err.Error(), "provide a tool name as the first argument")
 		}
@@ -67,6 +67,7 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 		}
 		return err
 	}
+	debugLog(cmd, "loaded manifest from %s", manifestPath)
 
 	// Find tool by name.
 	toolIdx := -1
@@ -88,6 +89,7 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 
 	// Resolve effective auth for this tool.
 	resolvedAuth := tk.ResolvedAuth(tool)
+	debugLog(cmd, "auth type for %s: %s", toolName, resolvedAuth.Type)
 
 	// Validate auth type.
 	switch resolvedAuth.Type {
@@ -127,6 +129,8 @@ func runLogin(cmd *cobra.Command, args []string, cfg *loginConfig) error {
 		ToolName:    toolName,
 		OpenBrowser: openBrowserFn,
 	}
+
+	debugLog(cmd, "starting OAuth flow")
 
 	// Delegate to the injected login function.
 	_, loginErr := cfg.Login(cmd.Context(), loginCfg)

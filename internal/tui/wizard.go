@@ -6,9 +6,14 @@ import (
 	"io"
 
 	"github.com/charmbracelet/huh"
-
-	"github.com/Obsidian-Owl/toolwright/internal/cli"
 )
+
+// WizardResult describes the user's choices from the TUI wizard.
+type WizardResult struct {
+	Description string
+	Runtime     string
+	Auth        string
+}
 
 // Wizard drives the interactive TUI prompts that collect project metadata.
 type Wizard struct {
@@ -71,7 +76,7 @@ func (t *lineTracker) Read(p []byte) (int, error) {
 
 // Run presents the wizard prompts and returns the collected values.
 // It respects ctx cancellation and propagates huh.ErrUserAborted as-is.
-func (w *Wizard) Run(ctx context.Context) (*cli.WizardResult, error) {
+func (w *Wizard) Run(ctx context.Context) (*WizardResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("wizard: context already cancelled: %w", err)
 	}
@@ -145,7 +150,7 @@ func (w *Wizard) Run(ctx context.Context) (*cli.WizardResult, error) {
 		return nil, fmt.Errorf("wizard: form run: %w", huh.ErrUserAborted)
 	}
 
-	return &cli.WizardResult{
+	return &WizardResult{
 		Description: description,
 		Runtime:     runtime,
 		Auth:        auth,

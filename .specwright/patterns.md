@@ -46,3 +46,38 @@ Reusable patterns discovered during development. Referenced from auto-memory.
 **Source:** testing unit (ToolExecutor interface for runner)
 **When:** A package depends on an external subsystem (process execution, HTTP, file I/O) that would make tests slow, flaky, or environment-dependent.
 **Pattern:** Define a one-method interface at the consumer site (e.g., `ToolExecutor` in tooltest, not in runner). The real implementation satisfies it naturally; tests inject a mock struct. Pre-allocate result slices indexed by position for parallel test execution with deterministic ordering.
+
+## P10: PR review catches generated code semantic bugs that gates miss
+**Source:** codegen unit (template correctness) + tui unit (lineTracker unconditional apply) + generate unit (missing os.WriteFile)
+**When:** Shipping code through automated quality gates.
+**Pattern:** Automated gates verify structural correctness (builds, tests pass, interfaces satisfied, no leaks) but miss "does the code do what it says" gaps. Both the tui and generate PRs had real bugs that all 5 gates passed. Treat PR review as a required gate for semantic correctness, especially for template-generated or scaffold code.
+
+## P11: Inline text/template for small generators
+**Source:** codegen unit
+**When:** Building code generators that produce fewer than ~20 files from templates.
+**Pattern:** Use Go's `text/template` with templates as string constants. No build tool dependencies, no embedded FS needed at this scale. Templates are colocated with generator logic for easy maintenance.
+
+## P12: Sanitise *url.Error to prevent credential leakage in query-param auth
+**Source:** generate unit (Gemini provider — security gate BLOCK)
+**When:** An HTTP client uses query-parameter authentication (e.g., `?key=...`) and the request can fail at the transport level (DNS, TLS, timeout).
+**Pattern:** Go's `http.Client.Do` wraps transport failures in `*url.Error` whose `.Error()` includes the full URL — including query params. Strip the URL from `*url.Error` using a custom error type that preserves only Op + cause. Apply to both `Do()` and `NewRequestWithContext()` error paths. Test with `http.Hijacker` to force transport errors and assert `NotContains(err.Error(), secretKey)`.
+
+## P13: Check HTTP status before reading response body
+**Source:** generate unit (PR review — all 3 providers)
+**When:** Making HTTP requests where non-200 responses don't need body parsing.
+**Pattern:** Check `resp.StatusCode` before `io.ReadAll`. On error status, drain the body with `io.Copy(io.Discard, resp.Body)` for connection reuse, then return a status-only error. This avoids allocating memory for error bodies and prevents accidentally including response content in error messages.
+
+## P14: Test the write path, not just the dry-run path
+**Source:** generate unit (PR review CRITICAL — missing os.WriteFile)
+**When:** A command has both dry-run (stdout) and write-to-disk modes.
+**Pattern:** If all tests use `--dry-run`, the actual file-write path is untested. Add at least one test per output mode that asserts the side effect (file exists, correct content). Use `t.TempDir()` for hermetic filesystem tests. This caught a critical bug where "written to X" was printed but `os.WriteFile` was never called.
+
+## P15: Non-dry-run tests must use temp directories
+**Source:** generate unit (cascade from P13 fix)
+**When:** Tests exercise a code path that writes files to disk.
+**Pattern:** Always use `t.TempDir()` + `filepath.Join` for output paths in non-dry-run tests. Writing to the working directory pollutes the repo, can cause cross-test interference, and may fail in CI sandboxes. When fixing a missing write, audit all existing non-dry-run tests for hardcoded paths.
+
+## P16: Error wrapper types should not duplicate caller context
+**Source:** generate unit (PR review — doubled provider prefix)
+**When:** Building custom error types that wrap underlying errors, called from sites that add their own context via `fmt.Errorf`.
+**Pattern:** An error wrapper should contain only its own context (e.g., `op + ": " + cause`). If callers already wrap with `fmt.Errorf("provider: action: %w", ...)`, including the provider name in the wrapper's `Error()` produces doubled prefixes like `"gemini: send request: gemini: Post: <cause>"`. Let the caller supply outer context.

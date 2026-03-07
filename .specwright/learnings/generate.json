@@ -1,0 +1,48 @@
+{
+  "workId": "generate",
+  "timestamp": "2026-03-06T05:00:00Z",
+  "findings": [
+    {
+      "category": "security",
+      "source": "generate unit — Gemini *url.Error API key leakage (security gate BLOCK)",
+      "description": "Go's http.Client.Do wraps transport failures in *url.Error whose .Error() includes the full URL. For Gemini's ?key= auth, this silently leaks the API key on DNS/TLS/timeout errors. Fixed with sanitiseHTTPError stripping the URL, preserving only Op + cause.",
+      "proposedRule": "P12: Sanitise *url.Error for query-param auth — Go embeds full URL in transport errors, leaking ?key= credentials.",
+      "disposition": "promoted:patterns"
+    },
+    {
+      "category": "architecture",
+      "source": "generate unit — PR review: all 3 providers read body before status check",
+      "description": "All providers consumed 256KB via io.ReadAll before checking resp.StatusCode. Non-200 responses allocate memory unnecessarily. Fixed: check status first, drain body for connection reuse, read only on 200.",
+      "proposedRule": "P13: Check HTTP status before reading body — drain on error for connection reuse, avoid allocating error bodies.",
+      "disposition": "promoted:patterns"
+    },
+    {
+      "category": "testing",
+      "source": "generate unit — PR review CRITICAL: outputManifestResult missing os.WriteFile",
+      "description": "Success message said 'written to X' but os.WriteFile was never called. All tests used --dry-run, so the write path was untested. Fixed by adding WriteFile and tests asserting file existence.",
+      "proposedRule": "P14: Test the write path, not just dry-run — if all tests use --dry-run, the os.WriteFile path is untested.",
+      "disposition": "promoted:patterns"
+    },
+    {
+      "category": "testing",
+      "source": "generate unit — cascade from P14 fix: non-dry-run tests wrote to working directory",
+      "description": "When the missing WriteFile was added, existing non-dry-run tests would have written to the repo working directory. Updated all to use t.TempDir() + filepath.Join for hermetic output paths.",
+      "proposedRule": "P15: Non-dry-run tests must use t.TempDir() — writing to working dir pollutes repo and breaks CI sandboxes.",
+      "disposition": "promoted:patterns"
+    },
+    {
+      "category": "architecture",
+      "source": "generate unit — PR review: doubled provider prefix in error messages",
+      "description": "sanitisedHTTPError.Error() included provider name, but callers wrapped with fmt.Errorf('gemini: send request: %w', ...), producing 'gemini: send request: gemini: Post: <cause>'. Fixed by removing provider field from the wrapper type.",
+      "proposedRule": "P16: Error wrapper types should not duplicate caller context — wrapper provides its own context, caller provides outer.",
+      "disposition": "promoted:patterns"
+    },
+    {
+      "category": "process",
+      "source": "generate unit + tui unit — PR reviewers caught real bugs all 5 gates missed",
+      "description": "Reinforces existing P10. Generate PR: missing os.WriteFile (functional regression). Tui PR: lineTracker applied unconditionally (would garble input in non-accessible mode). Both passed all automated gates.",
+      "proposedRule": "P10 (reinforced): PR review catches semantic bugs that gates miss.",
+      "disposition": "promoted:patterns"
+    }
+  ]
+}

@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // outputJSON writes v as indented JSON followed by a newline to w.
@@ -50,8 +52,12 @@ func isColorDisabled() bool {
 	return isCI()
 }
 
-// debugLog writes a timestamped diagnostic line to w.
-func debugLog(w io.Writer, msg string) {
-	ts := time.Now().Format("15:04:05")
-	fmt.Fprintf(w, "[%s] %s\n", ts, msg)
+// debugLog writes a timestamped diagnostic line to cmd's stderr when --debug is set.
+// It is a no-op when --debug is not set.
+func debugLog(cmd *cobra.Command, format string, args ...any) {
+	debug, _ := cmd.Flags().GetBool("debug")
+	if !debug {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "[DEBUG %s] %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
 }

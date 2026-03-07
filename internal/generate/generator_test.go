@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Obsidian-Owl/toolwright/internal/cli"
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 
 	"github.com/stretchr/testify/assert"
@@ -104,11 +103,6 @@ func testProviders(p LLMProvider) map[string]LLMProvider {
 // AC-1: Compile-time interface check.
 // ---------------------------------------------------------------------------
 
-// TestGenerator_ImplementsManifestGeneratorInterface is a compile-time check
-// that *Generator satisfies cli.manifestGenerator. If the interface changes or
-// Generator's signature drifts, this fails at compile time.
-var _ cli.ManifestGenerator = (*Generator)(nil)
-
 // ---------------------------------------------------------------------------
 // AC-1: NewGenerator has all 3 providers.
 // ---------------------------------------------------------------------------
@@ -137,7 +131,7 @@ func TestGenerator_Generate_ValidYAML_ReturnsResult(t *testing.T) {
 	p := newSuccessProvider("test-provider", "test-model", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "a test toolkit",
 	})
@@ -163,7 +157,7 @@ func TestGenerator_Generate_ResultContainsAPIVersionAndKind(t *testing.T) {
 	p := newSuccessProvider("test-provider", "test-model", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -184,7 +178,7 @@ func TestGenerator_Generate_YAMLExtractedFromFencedBlock(t *testing.T) {
 	p := newSuccessProvider("test-provider", "test-model", fencedResponse)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -204,7 +198,7 @@ func TestGenerator_Generate_ResultContainsProvider(t *testing.T) {
 	p := newSuccessProvider("my-provider", "default-m", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "my-provider",
 		Description: "test",
 	})
@@ -217,7 +211,7 @@ func TestGenerator_Generate_ResultContainsManifest(t *testing.T) {
 	p := newSuccessProvider("test-provider", "test-model", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -236,7 +230,7 @@ func TestGenerator_Generate_ProviderNotFound_ReturnsError(t *testing.T) {
 	p := newSuccessProvider("known-provider", "model", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "unknown",
 		Description: "test",
 	})
@@ -256,7 +250,7 @@ func TestGenerator_Generate_RetryOnProviderError(t *testing.T) {
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -272,7 +266,7 @@ func TestGenerator_Generate_NoRetryOnSuccess(t *testing.T) {
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -294,7 +288,7 @@ func TestGenerator_Generate_RetryOnInvalidYAML(t *testing.T) {
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -320,7 +314,7 @@ func TestGenerator_Generate_BothCallsFail_ReturnsError(t *testing.T) {
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -344,7 +338,7 @@ func TestGenerator_Generate_MaxTwoAttempts(t *testing.T) {
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -363,7 +357,7 @@ func TestGenerator_Generate_MaxTwoAttempts_InvalidYAML(t *testing.T) {
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -388,7 +382,7 @@ func TestGenerator_Generate_ModelPassedToProvider(t *testing.T) {
 	}
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 		Model:       "my-custom-model",
@@ -410,7 +404,7 @@ func TestGenerator_Generate_EmptyModel_UsesProviderDefault(t *testing.T) {
 	}
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 		Model:       "", // Empty -> use default.
@@ -432,7 +426,7 @@ func TestGenerator_Generate_NoMerge_FileExists_ReturnsError(t *testing.T) {
 	p := newSuccessProvider("test-provider", "model", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, genErr := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, genErr := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 		OutputPath:  tmpFile,
@@ -449,7 +443,7 @@ func TestGenerator_Generate_NoMerge_FileNotExists_NoError(t *testing.T) {
 	p := newSuccessProvider("test-provider", "model", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 		OutputPath:  nonexistent,
@@ -467,7 +461,7 @@ func TestGenerator_Generate_NoMerge_False_FileExists_NoError(t *testing.T) {
 	p := newSuccessProvider("test-provider", "model", validManifestYAML)
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, genErr := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, genErr := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 		OutputPath:  tmpFile,
@@ -494,7 +488,7 @@ metadata:
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -526,7 +520,7 @@ func TestGenerator_Generate_CancelledContext_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel before calling Generate.
 
-	_, err := g.Generate(ctx, cli.ManifestGenerateOptions{
+	_, err := g.Generate(ctx, ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -547,7 +541,7 @@ func TestGenerator_Generate_RetryOnInvalidFencedYAML(t *testing.T) {
 	})
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	result, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	result, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "test",
 	})
@@ -573,7 +567,7 @@ func TestGenerator_Generate_DescriptionPassedToPrompt(t *testing.T) {
 	}
 	g := NewGeneratorWithProviders(testProviders(p))
 
-	_, err := g.Generate(context.Background(), cli.ManifestGenerateOptions{
+	_, err := g.Generate(context.Background(), ManifestGenerateOptions{
 		Provider:    "test-provider",
 		Description: "A CLI tool for managing DNS records",
 	})

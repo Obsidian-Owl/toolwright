@@ -3,10 +3,14 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
+	toolwright "github.com/Obsidian-Owl/toolwright"
 	"github.com/Obsidian-Owl/toolwright/internal/auth"
 	"github.com/Obsidian-Owl/toolwright/internal/codegen"
+	"github.com/Obsidian-Owl/toolwright/internal/generate"
 	"github.com/Obsidian-Owl/toolwright/internal/runner"
+	"github.com/Obsidian-Owl/toolwright/internal/scaffold"
 	"github.com/Obsidian-Owl/toolwright/internal/tooltest"
+	"github.com/Obsidian-Owl/toolwright/internal/tui"
 )
 
 // parseDirAdapter adapts the tooltest.ParseTestDir free function to the
@@ -59,13 +63,13 @@ func BuildRootCommand() *cobra.Command {
 	engine.Register(codegen.NewTSMCPGenerator())
 	genCfg := &generateConfig{Engine: engine}
 	genCmd := newGenerateCmd(genCfg)
-	genCmd.AddCommand(newGenerateManifestCmd(&manifestGenerateConfig{Generator: nil}))
+	genCmd.AddCommand(newGenerateManifestCmd(&manifestGenerateConfig{Generator: generate.NewGenerator()}))
 	root.AddCommand(genCmd)
 
-	// init: wires scaffolder and wizard (nil until implementations exist).
+	// init: wires real scaffolder and wizard.
 	initCfg := &initConfig{
-		Scaffolder: nil,
-		Wizard:     nil,
+		Scaffolder: scaffold.New(toolwright.InitTemplates),
+		Wizard:     tui.NewWizard(isColorDisabled()),
 	}
 	root.AddCommand(newInitCmd(initCfg))
 
