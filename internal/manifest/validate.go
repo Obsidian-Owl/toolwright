@@ -25,10 +25,12 @@ var validFlagTypes = map[string]bool{
 	"int":      true,
 	"float":    true,
 	"bool":     true,
+	"object":   true,
 	"string[]": true,
 	"int[]":    true,
 	"float[]":  true,
 	"bool[]":   true,
+	"object[]": true,
 }
 
 // Validate checks a parsed Toolkit for structural and semantic errors.

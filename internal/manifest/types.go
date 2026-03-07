@@ -72,12 +72,13 @@ type Arg struct {
 
 // Flag represents a named flag for a tool.
 type Flag struct {
-	Name        string   `yaml:"name"`
-	Type        string   `yaml:"type"`
-	Required    bool     `yaml:"required"`
-	Default     any      `yaml:"default,omitempty"`
-	Enum        []string `yaml:"enum,omitempty"`
-	Description string   `yaml:"description"`
+	Name        string         `yaml:"name"`
+	Type        string         `yaml:"type"`
+	Required    bool           `yaml:"required"`
+	Default     any            `yaml:"default,omitempty"`
+	Enum        []string       `yaml:"enum,omitempty"`
+	Description string         `yaml:"description"`
+	ItemSchema  map[string]any `yaml:"itemSchema,omitempty"`
 }
 
 // Output describes a tool's output format and optional schema.
@@ -200,6 +201,7 @@ var validArrayTypes = map[string]string{
 	"int[]":    "int",
 	"float[]":  "float",
 	"bool[]":   "bool",
+	"object[]": "object",
 }
 
 // IsArrayType reports whether flagType is a valid array type (e.g., "string[]").

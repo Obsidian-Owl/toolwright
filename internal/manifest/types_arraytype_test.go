@@ -35,7 +35,7 @@ func TestIsArrayType(t *testing.T) {
 		// Edge cases — all must return false.
 		{name: "empty string", input: "", wantTrue: false},
 		{name: "bare brackets", input: "[]", wantTrue: false},
-		{name: "object array", input: "object[]", wantTrue: false},
+		{name: "object array", input: "object[]", wantTrue: true},
 		{name: "nested array", input: "string[][]", wantTrue: false},
 		{name: "uppercase STRING[]", input: "STRING[]", wantTrue: false},
 		{name: "mixed case String[]", input: "String[]", wantTrue: false},
@@ -102,7 +102,7 @@ func TestBaseType(t *testing.T) {
 		// Edge cases — must return empty string.
 		{name: "empty string", input: "", wantBase: ""},
 		{name: "bare brackets", input: "[]", wantBase: ""},
-		{name: "object array", input: "object[]", wantBase: ""},
+		{name: "object array", input: "object[]", wantBase: "object"},
 		{name: "nested array", input: "string[][]", wantBase: ""},
 		{name: "uppercase STRING[]", input: "STRING[]", wantBase: ""},
 		{name: "unknown type array", input: "unknown[]", wantBase: ""},
@@ -361,7 +361,6 @@ func TestParse_ArrayTypedFlag_RoundTrip_DefaultSlicePreserved(t *testing.T) {
 func TestIsArrayType_NotJustSuffixCheck(t *testing.T) {
 	// These all end in "[]" but should NOT be recognized as valid array types.
 	invalidSuffixed := []string{
-		"object[]",
 		"number[]",
 		"any[]",
 		"void[]",
@@ -384,7 +383,6 @@ func TestIsArrayType_NotJustSuffixCheck(t *testing.T) {
 // just trim "[]" from any string — it must validate the base type first.
 func TestBaseType_NotJustStringTrimming(t *testing.T) {
 	invalidTypes := []string{
-		"object[]",
 		"custom[]",
 		"[]",
 		"anything[]",
