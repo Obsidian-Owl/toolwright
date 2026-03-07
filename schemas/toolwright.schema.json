@@ -72,7 +72,7 @@
                 "name": { "type": "string" },
                 "type": {
                   "type": "string",
-                  "enum": ["string", "int", "float", "bool", "string[]", "int[]", "float[]", "bool[]"]
+                  "enum": ["string", "int", "float", "bool", "object", "string[]", "int[]", "float[]", "bool[]", "object[]"]
                 },
                 "required": { "type": "boolean" },
                 "default": {},
@@ -80,7 +80,11 @@
                   "type": "array",
                   "items": { "type": "string" }
                 },
-                "description": { "type": "string" }
+                "description": { "type": "string" },
+                "itemSchema": {
+                  "type": "object",
+                  "description": "JSON Schema for object-typed flag values"
+                }
               }
             }
           },
