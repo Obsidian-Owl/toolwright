@@ -70,7 +70,10 @@
               "type": "object",
               "properties": {
                 "name": { "type": "string" },
-                "type": { "type": "string" },
+                "type": {
+                  "type": "string",
+                  "enum": ["string", "int", "float", "bool", "string[]", "int[]", "float[]", "bool[]"]
+                },
                 "required": { "type": "boolean" },
                 "default": {},
                 "enum": {

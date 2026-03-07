@@ -1068,6 +1068,75 @@ func TestSchema_HasProperties_Metadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AC-6: Schema validates array flag types
+// ---------------------------------------------------------------------------
+
+func TestSchema_FlagTypeEnum(t *testing.T) {
+	makeFlagManifest := func(flagType string) string {
+		flagTypeJSON, _ := json.Marshal(flagType)
+		return `{
+			"apiVersion": "toolwright/v1",
+			"kind": "Toolkit",
+			"metadata": {
+				"name": "test",
+				"version": "1.0.0",
+				"description": "Test"
+			},
+			"tools": [{
+				"name": "run",
+				"description": "Runs something",
+				"entrypoint": "./run.sh",
+				"flags": [{
+					"name": "items",
+					"type": ` + string(flagTypeJSON) + `,
+					"description": "Some flag"
+				}]
+			}]
+		}`
+	}
+
+	tests := []struct {
+		name     string
+		flagType string
+		wantErr  bool
+	}{
+		// Valid scalar types (regression — must still pass)
+		{name: "scalar string", flagType: "string", wantErr: false},
+		{name: "scalar int", flagType: "int", wantErr: false},
+		{name: "scalar float", flagType: "float", wantErr: false},
+		{name: "scalar bool", flagType: "bool", wantErr: false},
+
+		// Valid array types
+		{name: "array string[]", flagType: "string[]", wantErr: false},
+		{name: "array int[]", flagType: "int[]", wantErr: false},
+		{name: "array float[]", flagType: "float[]", wantErr: false},
+		{name: "array bool[]", flagType: "bool[]", wantErr: false},
+
+		// Invalid types
+		{name: "unknown[]", flagType: "unknown[]", wantErr: true},
+		{name: "unknown scalar", flagType: "unknown", wantErr: true},
+		{name: "String uppercase", flagType: "String", wantErr: true},
+		{name: "INT uppercase", flagType: "INT", wantErr: true},
+		{name: "String[] uppercase", flagType: "String[]", wantErr: true},
+		{name: "[]string Go style", flagType: "[]string", wantErr: true},
+		{name: "empty string", flagType: "", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateJSON(t, makeFlagManifest(tc.flagType))
+			if tc.wantErr {
+				assert.Error(t, err,
+					"flag.type %q should be rejected by enum constraint", tc.flagType)
+			} else {
+				assert.NoError(t, err,
+					"flag.type %q should be accepted by enum constraint", tc.flagType)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Structural: root schema type is "object"
 // ---------------------------------------------------------------------------
 
