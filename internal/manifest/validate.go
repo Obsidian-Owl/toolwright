@@ -19,6 +19,18 @@ var (
 	semverRe = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?(\+[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?$`)
 )
 
+// validFlagTypes is the complete set of recognised flag types.
+var validFlagTypes = map[string]bool{
+	"string":   true,
+	"int":      true,
+	"float":    true,
+	"bool":     true,
+	"string[]": true,
+	"int[]":    true,
+	"float[]":  true,
+	"bool[]":   true,
+}
+
 // Validate checks a parsed Toolkit for structural and semantic errors.
 // Returns all found errors (not fail-fast).
 func Validate(t *Toolkit) []ValidationError {
@@ -145,6 +157,16 @@ func validateTool(tool Tool, prefix string) []ValidationError {
 func validateFlag(flag Flag, prefix string) []ValidationError {
 	var errs []ValidationError
 
+	// Reject unknown flag types first.
+	if !validFlagTypes[flag.Type] {
+		errs = append(errs, ValidationError{
+			Path:    prefix + ".type",
+			Message: fmt.Sprintf("unknown flag type %q (must be one of: string, int, float, bool, string[], int[], float[], bool[])", flag.Type),
+			Rule:    "unknown-flag-type",
+		})
+		return errs
+	}
+
 	// Check default value type.
 	if flag.Default != nil {
 		if err := checkDefaultType(flag.Type, flag.Default); err != nil {
@@ -171,6 +193,20 @@ func validateFlag(flag Flag, prefix string) []ValidationError {
 }
 
 func checkDefaultType(flagType string, value any) error {
+	if IsArrayType(flagType) {
+		elems, ok := value.([]interface{})
+		if !ok {
+			return fmt.Errorf("default value %v (%T) does not match type %q: expected array", value, value, flagType)
+		}
+		base := BaseType(flagType)
+		for i, elem := range elems {
+			if err := checkDefaultType(base, elem); err != nil {
+				return fmt.Errorf("default value: element [%d] %w", i, err)
+			}
+		}
+		return nil
+	}
+
 	switch flagType {
 	case "string":
 		if _, ok := value.(string); !ok {
@@ -199,6 +235,10 @@ func checkDefaultType(flagType string, value any) error {
 }
 
 func checkEnumType(flagType string, enum []string) error {
+	if IsArrayType(flagType) {
+		return checkEnumType(BaseType(flagType), enum)
+	}
+
 	switch flagType {
 	case "bool":
 		for _, v := range enum {
