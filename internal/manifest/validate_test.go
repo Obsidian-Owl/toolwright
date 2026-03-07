@@ -1467,3 +1467,906 @@ func errRules(errs []ValidationError) []string {
 	}
 	return rules
 }
+
+// findWarningByRule returns the first ValidationError with the given rule and
+// severity "warning", or nil if none found.
+func findWarningByRule(errs []ValidationError, rule string) *ValidationError {
+	for i := range errs {
+		if errs[i].Rule == rule && errs[i].Severity == SeverityWarning {
+			return &errs[i]
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// AC3: itemSchema compilation — valid and invalid JSON Schema on object types
+// ---------------------------------------------------------------------------
+
+func TestValidateFlag_ItemSchema_ValidSchema_ObjectType(t *testing.T) {
+	tests := []struct {
+		name       string
+		flagType   string
+		itemSchema map[string]any
+	}{
+		{
+			name:     "object with simple properties schema",
+			flagType: "object",
+			itemSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+				},
+			},
+		},
+		{
+			name:     "object with required fields schema",
+			flagType: "object",
+			itemSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+					"age":  map[string]any{"type": "integer"},
+				},
+				"required": []any{"name"},
+			},
+		},
+		{
+			name:     "object with minimal schema",
+			flagType: "object",
+			itemSchema: map[string]any{
+				"type": "object",
+			},
+		},
+		{
+			name:     "object[] with valid schema",
+			flagType: "object[]",
+			itemSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":   map[string]any{"type": "integer"},
+					"name": map[string]any{"type": "string"},
+				},
+			},
+		},
+		{
+			name:     "object[] with nested object schema",
+			flagType: "object[]",
+			itemSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"address": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"street": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{
+							Name:        "config",
+							Type:        tc.flagType,
+							Description: "Config flag",
+							ItemSchema:  tc.itemSchema,
+						},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "invalid-item-schema")
+			assert.Nil(t, ve,
+				"Flag type %q with valid itemSchema should not produce invalid-item-schema error, got: %v",
+				tc.flagType, errs)
+
+			// Also ensure no item-schema-not-allowed error (object types allow itemSchema)
+			ve2 := findErrorByRule(errs, "item-schema-not-allowed")
+			assert.Nil(t, ve2,
+				"Flag type %q should allow itemSchema, got: %v",
+				tc.flagType, errs)
+		})
+	}
+}
+
+func TestValidateFlag_ItemSchema_InvalidSchema(t *testing.T) {
+	tests := []struct {
+		name       string
+		flagType   string
+		itemSchema map[string]any
+	}{
+		{
+			name:     "object with invalid type value",
+			flagType: "object",
+			itemSchema: map[string]any{
+				"type": "nonexistent",
+			},
+		},
+		{
+			name:     "object with invalid property type",
+			flagType: "object",
+			itemSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "nonexistent"},
+				},
+			},
+		},
+		{
+			name:     "object[] with invalid type value",
+			flagType: "object[]",
+			itemSchema: map[string]any{
+				"type": "nonexistent",
+			},
+		},
+		{
+			name:     "object[] with invalid property type",
+			flagType: "object[]",
+			itemSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"count": map[string]any{"type": "imaginary"},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{
+							Name:        "config",
+							Type:        tc.flagType,
+							Description: "Config flag",
+							ItemSchema:  tc.itemSchema,
+						},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "invalid-item-schema")
+			require.NotNil(t, ve,
+				"Flag type %q with invalid itemSchema %v should produce invalid-item-schema error, got rules: %v",
+				tc.flagType, tc.itemSchema, errRules(errs))
+			assert.Contains(t, ve.Path, "tools[0].flags[0]",
+				"Error path should reference the flag")
+			assert.NotEmpty(t, ve.Message,
+				"Error should have a human-readable message")
+			// Invalid schema errors must be severity "error", not "warning"
+			assert.NotEqual(t, SeverityWarning, ve.Severity,
+				"Invalid item schema should be an error, not a warning")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC4: itemSchema not allowed on non-object types
+// ---------------------------------------------------------------------------
+
+func TestValidateFlag_ItemSchema_NotAllowedOnNonObjectTypes(t *testing.T) {
+	nonObjectTypes := []struct {
+		name     string
+		flagType string
+	}{
+		{name: "string", flagType: "string"},
+		{name: "int", flagType: "int"},
+		{name: "float", flagType: "float"},
+		{name: "bool", flagType: "bool"},
+		{name: "string[]", flagType: "string[]"},
+		{name: "int[]", flagType: "int[]"},
+		{name: "float[]", flagType: "float[]"},
+		{name: "bool[]", flagType: "bool[]"},
+	}
+
+	someSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"key": map[string]any{"type": "string"},
+		},
+	}
+
+	for _, tc := range nonObjectTypes {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{
+							Name:        "bad-flag",
+							Type:        tc.flagType,
+							Description: "Should not have itemSchema",
+							ItemSchema:  someSchema,
+						},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "item-schema-not-allowed")
+			require.NotNil(t, ve,
+				"Flag type %q with itemSchema should produce item-schema-not-allowed error, got rules: %v",
+				tc.flagType, errRules(errs))
+			assert.Contains(t, ve.Path, "tools[0].flags[0]",
+				"Error path should reference the flag")
+			assert.NotEmpty(t, ve.Message,
+				"Error should have a human-readable message explaining itemSchema is not allowed for type %q",
+				tc.flagType)
+		})
+	}
+}
+
+func TestValidateFlag_ItemSchema_AllowedOnObjectTypes(t *testing.T) {
+	// Verify that object and object[] do NOT produce "item-schema-not-allowed"
+	objectTypes := []struct {
+		name     string
+		flagType string
+	}{
+		{name: "object", flagType: "object"},
+		{name: "object[]", flagType: "object[]"},
+	}
+
+	someSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"key": map[string]any{"type": "string"},
+		},
+	}
+
+	for _, tc := range objectTypes {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{
+							Name:        "config",
+							Type:        tc.flagType,
+							Description: "Object flag with schema",
+							ItemSchema:  someSchema,
+						},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "item-schema-not-allowed")
+			assert.Nil(t, ve,
+				"Flag type %q should allow itemSchema, got error: %v", tc.flagType, ve)
+		})
+	}
+}
+
+func TestValidateFlag_ItemSchema_NilOnNonObject_NoError(t *testing.T) {
+	// Non-object types with NO itemSchema should NOT trigger item-schema-not-allowed.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{Name: "name", Type: "string", Description: "A string flag"},
+				{Name: "count", Type: "int", Description: "An int flag"},
+				{Name: "tags", Type: "string[]", Description: "A string array flag"},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "item-schema-not-allowed")
+	assert.Nil(t, ve,
+		"Non-object types without itemSchema should produce no item-schema-not-allowed error")
+}
+
+// ---------------------------------------------------------------------------
+// AC5: missing itemSchema warning for object types
+// ---------------------------------------------------------------------------
+
+func TestValidateFlag_MissingItemSchema_ObjectType_Warning(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagType string
+	}{
+		{name: "object without itemSchema", flagType: "object"},
+		{name: "object[] without itemSchema", flagType: "object[]"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{
+							Name:        "data",
+							Type:        tc.flagType,
+							Description: "Object flag without schema",
+							// ItemSchema deliberately omitted
+						},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+			ve := findWarningByRule(errs, "missing-item-schema")
+			require.NotNil(t, ve,
+				"Flag type %q without itemSchema should produce a warning with rule missing-item-schema, got: %v",
+				tc.flagType, errs)
+			assert.Equal(t, SeverityWarning, ve.Severity,
+				"missing-item-schema should be a warning, not an error")
+			assert.Contains(t, ve.Path, "tools[0].flags[0]",
+				"Warning path should reference the flag")
+			assert.NotEmpty(t, ve.Message,
+				"Warning should have a human-readable message")
+		})
+	}
+}
+
+func TestValidateFlag_MissingItemSchema_NonObjectType_NoWarning(t *testing.T) {
+	// Non-object types without itemSchema should NOT produce a missing-item-schema warning.
+	nonObjectTypes := []string{"string", "int", "float", "bool", "string[]", "int[]", "float[]", "bool[]"}
+
+	for _, flagType := range nonObjectTypes {
+		t.Run(flagType, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{
+							Name:        "myflag",
+							Type:        flagType,
+							Description: "A non-object flag",
+							// No itemSchema — but that's expected for non-object types
+						},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "missing-item-schema")
+			assert.Nil(t, ve,
+				"Non-object type %q without itemSchema should NOT produce missing-item-schema, got: %v",
+				flagType, errs)
+		})
+	}
+}
+
+func TestValidateFlag_MissingItemSchema_IsWarningNotError(t *testing.T) {
+	// Explicitly verify the severity is warning, not error or empty string.
+	// This prevents a lazy implementation that sets all issues to error severity.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "payload",
+					Type:        "object",
+					Description: "Object without schema",
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "missing-item-schema")
+	require.NotNil(t, ve,
+		"object type without itemSchema must produce missing-item-schema result")
+
+	// Must be exactly "warning" — not "" (empty), not "error", not "info"
+	assert.Equal(t, SeverityWarning, ve.Severity,
+		"missing-item-schema severity must be exactly %q, got %q", SeverityWarning, ve.Severity)
+}
+
+func TestValidateFlag_ObjectWithItemSchema_NoMissingWarning(t *testing.T) {
+	// When itemSchema IS present on an object flag, no missing-item-schema warning.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "config",
+					Type:        "object",
+					Description: "Object with schema",
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"key": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "missing-item-schema")
+	assert.Nil(t, ve,
+		"object with itemSchema should NOT produce missing-item-schema warning")
+}
+
+// ---------------------------------------------------------------------------
+// AC6: object default validation with and without itemSchema
+// ---------------------------------------------------------------------------
+
+func TestCheckDefaultType_Object_MapDefault_NoSchema(t *testing.T) {
+	// type: "object" with a map default and no itemSchema should pass.
+	err := checkDefaultType("object", map[string]any{"key": "val"})
+	assert.NoError(t, err,
+		"checkDefaultType(\"object\", map{key:val}) should pass when no schema context")
+}
+
+func TestCheckDefaultType_Object_NonMapDefault(t *testing.T) {
+	// type: "object" with a non-map default should fail.
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "string default", value: "not-a-map"},
+		{name: "int default", value: 42},
+		{name: "bool default", value: true},
+		{name: "slice default", value: []interface{}{"a", "b"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkDefaultType("object", tc.value)
+			require.Error(t, err,
+				"checkDefaultType(\"object\", %v (%T)) should fail for non-map default",
+				tc.value, tc.value)
+		})
+	}
+}
+
+func TestValidateFlag_ObjectDefault_MatchesItemSchema_Passes(t *testing.T) {
+	// An object flag whose default matches the itemSchema should produce no type-mismatch error.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "config",
+					Type:        "object",
+					Description: "Config with valid default",
+					Default:     map[string]any{"name": "test", "count": 5},
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"name":  map[string]any{"type": "string"},
+							"count": map[string]any{"type": "integer"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	assert.Nil(t, ve,
+		"Object default matching itemSchema should not produce type-mismatch error, got: %v", errs)
+}
+
+func TestValidateFlag_ObjectDefault_ViolatesItemSchema_Error(t *testing.T) {
+	// An object flag whose default violates the itemSchema should produce a type-mismatch error.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "config",
+					Type:        "object",
+					Description: "Config with invalid default",
+					Default:     map[string]any{"name": 12345}, // name should be string, not int
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"name": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	require.NotNil(t, ve,
+		"Object default violating itemSchema should produce type-mismatch at tools[0].flags[0].default, got rules: %v",
+		errRules(errs))
+	assert.Contains(t, ve.Message, "name",
+		"Error message should indicate which field violated the schema")
+}
+
+func TestValidateFlag_ObjectDefault_MissingRequiredField_Error(t *testing.T) {
+	// An object default missing a required field should produce a type-mismatch error.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "config",
+					Type:        "object",
+					Description: "Config with missing required field",
+					Default:     map[string]any{"optional": "value"}, // missing "name"
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"name": map[string]any{"type": "string"},
+						},
+						"required": []any{"name"},
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	require.NotNil(t, ve,
+		"Object default missing required field should produce type-mismatch error, got rules: %v",
+		errRules(errs))
+}
+
+func TestValidateFlag_ObjectDefault_NoItemSchema_MapPasses(t *testing.T) {
+	// AC6: type: "object" with no itemSchema accepts any JSON object as default.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "data",
+					Type:        "object",
+					Description: "Schemaless object flag",
+					Default:     map[string]any{"anything": "goes", "nested": map[string]any{"deep": true}},
+					// No ItemSchema — accepts any map
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	assert.Nil(t, ve,
+		"Object default with no itemSchema should accept any map, got error: %v", ve)
+}
+
+func TestValidateFlag_ObjectDefault_NoItemSchema_NonMapFails(t *testing.T) {
+	// Even without itemSchema, a non-map default for type:"object" should fail.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "data",
+					Type:        "object",
+					Description: "Object flag with string default",
+					Default:     "not-a-map",
+					// No ItemSchema
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	require.NotNil(t, ve,
+		"Object flag with string default should produce type-mismatch, got rules: %v",
+		errRules(errs))
+}
+
+func TestValidateFlag_ObjectArrayDefault_ValidArray_Passes(t *testing.T) {
+	// type: "object[]" with a valid array of maps should pass.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "items",
+					Type:        "object[]",
+					Description: "Array of objects",
+					Default:     []interface{}{map[string]any{"id": 1}, map[string]any{"id": 2}},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	assert.Nil(t, ve,
+		"object[] with valid array-of-maps default should pass, got error: %v", ve)
+}
+
+func TestValidateFlag_ObjectArrayDefault_NotArray_Fails(t *testing.T) {
+	// type: "object[]" with a non-array default should fail.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "items",
+					Type:        "object[]",
+					Description: "Array of objects",
+					Default:     map[string]any{"id": 1}, // single map, not array
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	require.NotNil(t, ve,
+		"object[] with non-array default should produce type-mismatch, got rules: %v",
+		errRules(errs))
+}
+
+func TestValidateFlag_ObjectArrayDefault_ElementViolatesSchema_Fails(t *testing.T) {
+	// type: "object[]" with itemSchema, one element violates it.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "items",
+					Type:        "object[]",
+					Description: "Array of typed objects",
+					Default: []interface{}{
+						map[string]any{"name": "valid"},
+						map[string]any{"name": 999}, // name should be string
+					},
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"name": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].flags[0].default", "type-mismatch")
+	require.NotNil(t, ve,
+		"object[] with element violating itemSchema should produce type-mismatch, got rules: %v",
+		errRules(errs))
+}
+
+// ---------------------------------------------------------------------------
+// Adversarial: prevent hardcoded rule checks and implementation shortcuts
+// ---------------------------------------------------------------------------
+
+func TestValidateFlag_ItemSchema_MultipleFlags_IndependentValidation(t *testing.T) {
+	// Two flags on the same tool: one valid itemSchema, one invalid.
+	// Both should be independently validated (not short-circuit).
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "good-config",
+					Type:        "object",
+					Description: "Valid schema",
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"name": map[string]any{"type": "string"},
+						},
+					},
+				},
+				{
+					Name:        "bad-config",
+					Type:        "object",
+					Description: "Invalid schema",
+					ItemSchema: map[string]any{
+						"type": "nonexistent",
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+
+	// First flag should be clean
+	goodFlagErrs := findError(errs, "tools[0].flags[0].itemSchema", "invalid-item-schema")
+	assert.Nil(t, goodFlagErrs,
+		"First flag with valid itemSchema should not produce error")
+
+	// Second flag should have error
+	ve := findErrorByRule(errs, "invalid-item-schema")
+	require.NotNil(t, ve,
+		"Second flag with invalid itemSchema should produce error, got rules: %v", errRules(errs))
+	assert.Contains(t, ve.Path, "tools[0].flags[1]",
+		"Error path should reference flags[1], the second flag")
+}
+
+func TestValidateFlag_ItemSchema_EmptyMap_NotAllowedAsSchema(t *testing.T) {
+	// An empty map {} is technically valid JSON Schema (matches anything).
+	// This should NOT produce an invalid-item-schema error.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "config",
+					Type:        "object",
+					Description: "Empty schema",
+					ItemSchema:  map[string]any{},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "invalid-item-schema")
+	assert.Nil(t, ve,
+		"Empty itemSchema {} is valid JSON Schema (matches anything), should not error")
+}
+
+func TestValidateFlag_ItemSchema_SecondToolSecondFlag_PathCorrect(t *testing.T) {
+	// Verify error path is correct for deeply-indexed flags.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "tool-a",
+			Description: "A",
+			Entrypoint:  "./a.sh",
+			Flags: []Flag{
+				{Name: "ok", Type: "string", Description: "Fine"},
+			},
+		},
+		{
+			Name:        "tool-b",
+			Description: "B",
+			Entrypoint:  "./b.sh",
+			Flags: []Flag{
+				{Name: "also-ok", Type: "int", Description: "Fine"},
+				{
+					Name:        "bad",
+					Type:        "string",
+					Description: "Should not have itemSchema",
+					ItemSchema: map[string]any{
+						"type": "object",
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "item-schema-not-allowed")
+	require.NotNil(t, ve,
+		"String flag with itemSchema should produce item-schema-not-allowed, got rules: %v",
+		errRules(errs))
+	assert.Contains(t, ve.Path, "tools[1].flags[1]",
+		"Error path should be tools[1].flags[1], got %q", ve.Path)
+}
+
+func TestValidateFlag_ExistingErrors_SeverityDefaultsToError(t *testing.T) {
+	// Existing validation errors (like type-mismatch, unknown-flag-type) should
+	// have Severity of "error" or "" (backwards compatible). This test ensures
+	// the severity distinction between warnings and errors is meaningful.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{Name: "bad", Type: "badtype", Description: "Unknown type"},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "unknown-flag-type")
+	require.NotNil(t, ve, "Should produce unknown-flag-type error")
+
+	// An existing error's severity should be "error" (not warning, not empty).
+	// This ensures warning severity is genuinely different from error severity.
+	assert.Equal(t, SeverityError, ve.Severity,
+		"Existing validation errors should have severity %q, got %q",
+		SeverityError, ve.Severity)
+}
+
+func TestValidateFlag_ItemSchema_BothInvalidAndNotAllowed_OnlyNotAllowed(t *testing.T) {
+	// If a non-object type has itemSchema with invalid JSON Schema, should the
+	// error be "item-schema-not-allowed" (since it's on the wrong type)?
+	// The not-allowed check should take precedence — we don't need to validate
+	// a schema that shouldn't be there in the first place.
+	tk := validToolkit()
+	tk.Tools = []Tool{
+		{
+			Name:        "my-tool",
+			Description: "A tool",
+			Entrypoint:  "./tool.sh",
+			Flags: []Flag{
+				{
+					Name:        "bad",
+					Type:        "string",
+					Description: "String with invalid schema",
+					ItemSchema: map[string]any{
+						"type": "nonexistent",
+					},
+				},
+			},
+		},
+	}
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "item-schema-not-allowed")
+	require.NotNil(t, ve,
+		"String flag with itemSchema should produce item-schema-not-allowed, got rules: %v",
+		errRules(errs))
+
+	// Should NOT also produce invalid-item-schema (would be redundant)
+	ve2 := findErrorByRule(errs, "invalid-item-schema")
+	assert.Nil(t, ve2,
+		"When item-schema-not-allowed fires, invalid-item-schema should not also fire")
+}
