@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -199,8 +200,9 @@ type flagData struct {
 	ArrayBase   string // base element type for array flags (e.g., "string", "int")
 	// Object flag fields (type "object" or "object[]").
 	IsObject             bool     // true when manifest type is "object" or "object[]"
+	IsObjectArray        bool     // true when manifest type is "object[]"
 	HasItemSchema        bool     // true when flag.ItemSchema is non-nil
-	ItemSchemaProperties []string // property names from itemSchema.properties for --help summary
+	ItemSchemaProperties []string // required property names from itemSchema for validation
 }
 
 type argData struct {
@@ -349,11 +351,13 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 			}
 		}
 
+		isObjectArray := f.Type == "object[]"
+
 		var schemaProps []string
 		var hasItemSchema bool
 		if isObject && f.ItemSchema != nil {
 			hasItemSchema = true
-			schemaProps = extractSchemaProperties(f.ItemSchema)
+			schemaProps = extractRequiredProperties(f.ItemSchema)
 		}
 
 		flags[i] = flagData{
@@ -367,6 +371,7 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 			IsArray:              isArr,
 			ArrayBase:            base,
 			IsObject:             isObject,
+			IsObjectArray:        isObjectArray,
 			HasItemSchema:        hasItemSchema,
 			ItemSchemaProperties: schemaProps,
 		}
@@ -481,14 +486,31 @@ func extractSchemaProperties(schema map[string]any) []string {
 	for k := range props {
 		names = append(names, k)
 	}
-	// Sort for deterministic output.
-	for i := 0; i < len(names); i++ {
-		for j := i + 1; j < len(names); j++ {
-			if names[i] > names[j] {
-				names[i], names[j] = names[j], names[i]
-			}
+	sort.Strings(names)
+	return names
+}
+
+// extractRequiredProperties returns the property names listed in a JSON Schema
+// "required" array. Returns nil if the schema has no "required" field.
+func extractRequiredProperties(schema map[string]any) []string {
+	if schema == nil {
+		return nil
+	}
+	reqRaw, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+	reqArr, ok := reqRaw.([]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(reqArr))
+	for _, v := range reqArr {
+		if s, ok := v.(string); ok {
+			names = append(names, s)
 		}
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -766,6 +788,21 @@ var {{.GoName}}Cmd = &cobra.Command{
 {{- end}}
 {{- range .Flags}}
 {{- if .IsObject}}
+{{- if .IsObjectArray}}
+		var parsed{{.GoName}} []map[string]any
+		if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
+			return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
+		}
+{{- if .HasItemSchema}}
+		for _idx, _elem := range parsed{{.GoName}} {
+			for _, _field := range []string{ {{joinQuoted .ItemSchemaProperties}} } {
+				if _, ok := _elem[_field]; !ok {
+					return fmt.Errorf("--{{.Name}}[%d]: required field %q missing from JSON object", _idx, _field)
+				}
+			}
+		}
+{{- end}}
+{{- else}}
 		var parsed{{.GoName}} map[string]any
 		if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
 			return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
@@ -776,6 +813,7 @@ var {{.GoName}}Cmd = &cobra.Command{
 				return fmt.Errorf("--{{.Name}}: required field %q missing from JSON object", _field)
 			}
 		}
+{{- end}}
 {{- end}}
 		_ = parsed{{.GoName}}
 {{- end}}

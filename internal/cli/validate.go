@@ -73,7 +73,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 			errs = append(errs, item)
 		}
 	}
-	debugLog(cmd, "structural validation: %d errors", len(errs))
+	debugLog(cmd, "structural validation: %d errors, %d warnings", len(errs), len(warns))
 
 	// Entrypoint checks.
 	for i, tool := range tk.Tools {
