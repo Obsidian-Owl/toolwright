@@ -432,7 +432,7 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"joinStrings": strings.Join,
 		"tsType":      tsType,
 		"esc":         escStringLiteral,
-		"joinEsc": joinEscStringLiterals,
+		"joinEsc":     joinEscStringLiterals,
 	}
 	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
 	if err != nil {

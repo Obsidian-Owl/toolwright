@@ -423,7 +423,7 @@ func renderTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"formatArrayDefault": formatArrayDefault,
 		"joinStrings":        strings.Join,
 		"esc":                escStringLiteral,
-		"joinEsc": joinEscStringLiterals,
+		"joinEsc":            joinEscStringLiterals,
 		"isStringBase": func(base string) bool {
 			return base == "string"
 		},
