@@ -3,6 +3,7 @@ package codegen
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -191,6 +192,8 @@ func tsType(manifestType string) string {
 		return "number"
 	case "bool":
 		return "boolean"
+	case "object":
+		return "Record<string, unknown>"
 	default:
 		return "string"
 	}
@@ -209,6 +212,121 @@ func zodType(manifestType string) string {
 	default:
 		return "z.string()"
 	}
+}
+
+// requiredSet returns a set of property names listed in the JSON Schema "required" array.
+func requiredSet(schema map[string]any) map[string]bool {
+	req, _ := schema["required"].([]any)
+	set := make(map[string]bool, len(req))
+	for _, v := range req {
+		if s, ok := v.(string); ok {
+			set[s] = true
+		}
+	}
+	return set
+}
+
+// buildZodObject converts a JSON Schema object (with optional "properties" and
+// "required") into a z.object({...}) expression. Properties are emitted in
+// alphabetical order. Non-required properties get .optional().
+// If properties is nil or empty, returns z.record(z.unknown()).
+// When compact is true, properties are rendered on a single line.
+func buildZodObject(schema map[string]any, compact bool) string {
+	propsRaw, _ := schema["properties"].(map[string]any)
+	if len(propsRaw) == 0 {
+		return "z.record(z.unknown())"
+	}
+	reqSet := requiredSet(schema)
+
+	// Sort property names for deterministic output.
+	names := make([]string, 0, len(propsRaw))
+	for k := range propsRaw {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	if compact {
+		// Single-line format: z.object({ p1: z.t1(), p2: z.t2().optional() })
+		var parts []string
+		for _, name := range names {
+			propSchema, _ := propsRaw[name].(map[string]any)
+			zodExpr := itemSchemaToZod(propSchema)
+			if !reqSet[name] {
+				zodExpr += ".optional()"
+			}
+			parts = append(parts, name+": "+zodExpr)
+		}
+		return "z.object({ " + strings.Join(parts, ", ") + " })"
+	}
+
+	// Multi-line format: each property on its own line.
+	var sb strings.Builder
+	sb.WriteString("z.object({\n")
+	for _, name := range names {
+		propSchema, _ := propsRaw[name].(map[string]any)
+		zodExpr := itemSchemaToZod(propSchema)
+		if !reqSet[name] {
+			zodExpr += ".optional()"
+		}
+		sb.WriteString("  ")
+		sb.WriteString(name)
+		sb.WriteString(": ")
+		sb.WriteString(zodExpr)
+		sb.WriteString(",\n")
+	}
+	sb.WriteString("})")
+	return sb.String()
+}
+
+// itemSchemaToZod converts a JSON Schema map to a Zod schema expression string.
+// It handles the primitive types (string, number, integer, boolean), array, and object.
+func itemSchemaToZod(schema map[string]any) string {
+	if schema == nil {
+		return "z.unknown()"
+	}
+	typeVal, _ := schema["type"].(string)
+	switch typeVal {
+	case "string":
+		return "z.string()"
+	case "number", "integer":
+		return "z.number()"
+	case "boolean":
+		return "z.boolean()"
+	case "array":
+		items, _ := schema["items"].(map[string]any)
+		if items != nil {
+			return "z.array(" + itemSchemaToZod(items) + ")"
+		}
+		return "z.array(z.unknown())"
+	case "object":
+		return buildZodObject(schema, false)
+	default:
+		return "z.unknown()"
+	}
+}
+
+// objectZodType returns the Zod expression for an object or object[] flag,
+// using itemSchemaToZod when itemSchema is present and non-empty, or
+// z.record(z.unknown()) when absent.
+// compact controls whether z.object properties are on one line (for optional flags)
+// or on separate lines (for required flags).
+func objectZodType(flagType string, itemSchema map[string]any, compact bool) string {
+	isArray := manifest.IsArrayType(flagType)
+	var inner string
+	if len(itemSchema) > 0 {
+		typeVal, _ := itemSchema["type"].(string)
+		if typeVal == "object" {
+			inner = buildZodObject(itemSchema, compact)
+		} else {
+			inner = itemSchemaToZod(itemSchema)
+		}
+	} else {
+		inner = "z.record(z.unknown())"
+	}
+	if isArray {
+		return "z.array(" + inner + ")"
+	}
+	return inner
 }
 
 // containsTransport returns true if the transport slice contains the given value.
@@ -248,10 +366,22 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
 	}
 	flags := make([]tsFlagData, len(tool.Flags))
 	for i, f := range tool.Flags {
+		baseType := manifest.BaseType(f.Type)
+		if baseType == "" {
+			baseType = f.Type
+		}
+		var zodExpr string
+		if baseType == "object" {
+			// Use compact (single-line) format for optional flags so the flag-level
+			// .optional() appears on the same line as the flag name.
+			zodExpr = objectZodType(f.Type, f.ItemSchema, !f.Required)
+		} else {
+			zodExpr = zodType(f.Type)
+		}
 		flags[i] = tsFlagData{
 			Name:        f.Name,
 			TSType:      tsType(f.Type),
-			ZodType:     zodType(f.Type),
+			ZodType:     zodExpr,
 			Required:    f.Required,
 			Description: f.Description,
 		}
@@ -302,13 +432,7 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"joinStrings": strings.Join,
 		"tsType":      tsType,
 		"esc":         escStringLiteral,
-		"joinEsc": func(elems []string, sep string) string {
-			escaped := make([]string, len(elems))
-			for i, e := range elems {
-				escaped[i] = escStringLiteral(e)
-			}
-			return strings.Join(escaped, sep)
-		},
+		"joinEsc":     joinEscStringLiterals,
 	}
 	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
 	if err != nil {
@@ -413,7 +537,7 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
 {{- end}}
   // TODO: implement {{.ToolName}} logic
   return {
-    content: [{ type: "text", text: "{{.ToolName}} executed" }],
+    content: [{ type: "text", text: "{{.ToolName | esc}} executed" }],
   };
 }
 
@@ -422,7 +546,7 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
  */
 export function register(server: McpServer): void {
   server.tool(
-    "{{.ToolName}}",
+    "{{.ToolName | esc}}",
     "{{.Description | esc}}",
     inputSchema.shape,
     async (input: {{.ToolName}}Input) => {
@@ -450,7 +574,7 @@ interface ToolEntry {
 // Registry of all available tools with their names and descriptions
 const toolRegistry: ToolEntry[] = [
 {{- range .Tools}}
-  { name: "{{.Name}}", description: "{{.Description | esc}}" },
+  { name: "{{.Name | esc}}", description: "{{.Description | esc}}" },
 {{- end}}
 ];
 
@@ -623,7 +747,7 @@ const metadataTSTmpl = `import { IncomingMessage, ServerResponse } from "node:ht
 // Serves the /.well-known/oauth-protected-resource endpoint
 
 const protectedResourceMetadata = {
-  resource: process.env["RESOURCE_URL"] ?? "{{.ProviderURL}}",
+  resource: process.env["RESOURCE_URL"] ?? "{{.ProviderURL | esc}}",
   authorization_servers: ["{{.ProviderURL | esc}}"],
   scopes_supported: [{{range $i, $s := .Scopes}}{{if $i}}, {{end}}"{{$s | esc}}"{{end}}],
   bearer_methods_supported: ["header"],

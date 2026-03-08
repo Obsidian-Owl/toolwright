@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -20,8 +21,17 @@ var validToolName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
 // escStringLiteral escapes a string for safe interpolation inside a
 // double-quoted Go or JavaScript/TypeScript string literal.
 func escStringLiteral(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`)
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "\x00", `\x00`)
 	return r.Replace(s)
+}
+
+// joinEscStringLiterals escapes each element and joins with the separator.
+func joinEscStringLiterals(elems []string, sep string) string {
+	escaped := make([]string, len(elems))
+	for i, e := range elems {
+		escaped[i] = escStringLiteral(e)
+	}
+	return strings.Join(escaped, sep)
 }
 
 // GoCLIGenerator generates Go CLI projects using Cobra.
@@ -186,8 +196,13 @@ type flagData struct {
 	Description string
 	Enum        []string
 	HasShort    bool
-	IsArray     bool   // true when the manifest type is an array type (e.g., "string[]")
+	IsArray     bool   // true when the manifest type is an array type (e.g., "string[]"), NOT for object[]
 	ArrayBase   string // base element type for array flags (e.g., "string", "int")
+	// Object flag fields (type "object" or "object[]").
+	IsObject             bool     // true when manifest type is "object" or "object[]"
+	IsObjectArray        bool     // true when manifest type is "object[]"
+	HasItemSchema        bool     // true when flag.ItemSchema is non-nil
+	ItemSchemaProperties []string // required property names from itemSchema for validation
 }
 
 type argData struct {
@@ -211,6 +226,7 @@ type toolGoData struct {
 	TokenFlag              string
 	HasNonStringArgs       bool // true if any arg needs strconv parsing
 	HasNonStringArrayFlags bool // true if any flag is a non-string array type needing strconv
+	HasObjectFlags         bool // true if any flag is type "object" or "object[]"
 }
 
 type goModData struct {
@@ -267,6 +283,9 @@ func goType(manifestType string) string {
 		return "[]float64"
 	case "bool[]":
 		return "[]bool"
+	case "object", "object[]":
+		// Object types are passed as a single JSON string at the CLI level.
+		return "string"
 	default:
 		return "string"
 	}
@@ -308,22 +327,59 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 
 	flags := make([]flagData, len(tool.Flags))
 	hasNonStringArrayFlags := false
+	hasObjectFlags := false
 	for i, f := range tool.Flags {
 		isArr := manifest.IsArrayType(f.Type)
 		base := manifest.BaseType(f.Type)
+
+		// Object types ("object" or "object[]") are passed as a single JSON
+		// string, not as repeated CLI values. Override array treatment.
+		isObject := f.Type == "object" || base == "object"
+		if isObject {
+			isArr = false
+			base = ""
+		}
+
+		// Augment description with JSON hint for object flags.
+		desc := f.Description
+		if isObject {
+			props := extractSchemaProperties(f.ItemSchema)
+			if len(props) > 0 {
+				desc = "(JSON) " + desc + " (expects: " + strings.Join(props, ", ") + ")"
+			} else {
+				desc = "(JSON) " + desc
+			}
+		}
+
+		isObjectArray := f.Type == "object[]"
+
+		var schemaProps []string
+		var hasItemSchema bool
+		if isObject && f.ItemSchema != nil {
+			hasItemSchema = true
+			schemaProps = extractRequiredProperties(f.ItemSchema)
+		}
+
 		flags[i] = flagData{
-			Name:        f.Name,
-			GoName:      goIdentifier(f.Name),
-			GoType:      goType(f.Type),
-			Required:    f.Required,
-			Default:     f.Default,
-			Description: f.Description,
-			Enum:        f.Enum,
-			IsArray:     isArr,
-			ArrayBase:   base,
+			Name:                 f.Name,
+			GoName:               goIdentifier(f.Name),
+			GoType:               goType(f.Type),
+			Required:             f.Required,
+			Default:              f.Default,
+			Description:          desc,
+			Enum:                 f.Enum,
+			IsArray:              isArr,
+			ArrayBase:            base,
+			IsObject:             isObject,
+			IsObjectArray:        isObjectArray,
+			HasItemSchema:        hasItemSchema,
+			ItemSchemaProperties: schemaProps,
 		}
 		if isArr && base != "string" {
 			hasNonStringArrayFlags = true
+		}
+		if isObject {
+			hasObjectFlags = true
 		}
 	}
 
@@ -354,6 +410,7 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 		TokenFlag:              tokenFlag,
 		HasNonStringArgs:       hasNonStringArgs,
 		HasNonStringArrayFlags: hasNonStringArrayFlags,
+		HasObjectFlags:         hasObjectFlags,
 	}
 }
 
@@ -366,15 +423,18 @@ func renderTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"formatArrayDefault": formatArrayDefault,
 		"joinStrings":        strings.Join,
 		"esc":                escStringLiteral,
-		"joinEsc": func(elems []string, sep string) string {
-			escaped := make([]string, len(elems))
-			for i, e := range elems {
-				escaped[i] = escStringLiteral(e)
-			}
-			return strings.Join(escaped, sep)
-		},
+		"joinEsc":            joinEscStringLiterals,
 		"isStringBase": func(base string) bool {
 			return base == "string"
+		},
+		// joinQuoted emits elements as comma-separated double-quoted Go string
+		// literals, suitable for use inside a []string{...} composite literal.
+		"joinQuoted": func(elems []string) string {
+			quoted := make([]string, len(elems))
+			for i, e := range elems {
+				quoted[i] = fmt.Sprintf("%q", e)
+			}
+			return strings.Join(quoted, ", ")
 		},
 	}
 	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
@@ -399,10 +459,59 @@ func cobraFlagFunc(goTypeName string) string {
 	case "bool":
 		return "BoolVar"
 	case "[]string", "[]int", "[]float64", "[]bool":
+		// Safety net: array types are handled directly by the template's
+		// .IsArray branch (StringArrayVar). These cases are unreachable
+		// in normal flow but kept as a defensive fallback.
 		return "StringArrayVar"
 	default:
 		return "StringVar"
 	}
+}
+
+// extractSchemaProperties returns the property names from a JSON Schema
+// "properties" map. Returns nil if the schema is nil or has no "properties".
+func extractSchemaProperties(schema map[string]any) []string {
+	if schema == nil {
+		return nil
+	}
+	propsRaw, ok := schema["properties"]
+	if !ok {
+		return nil
+	}
+	props, ok := propsRaw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(props))
+	for k := range props {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// extractRequiredProperties returns the property names listed in a JSON Schema
+// "required" array. Returns nil if the schema has no "required" field.
+func extractRequiredProperties(schema map[string]any) []string {
+	if schema == nil {
+		return nil
+	}
+	reqRaw, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+	reqArr, ok := reqRaw.([]any)
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(reqArr))
+	for _, v := range reqArr {
+		if s, ok := v.(string); ok {
+			names = append(names, s)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // formatDefault returns the Go literal representation of a default value.
@@ -442,14 +551,23 @@ func formatArrayDefault(v any, isStringBase bool) string {
 		return "nil"
 	}
 	if !isStringBase {
-		return "[]string{}"
+		// Non-string types are parsed from strings at runtime.
+		// Convert manifest default values to their string representations.
+		if len(items) == 0 {
+			return "[]string{}"
+		}
+		parts := make([]string, len(items))
+		for i, item := range items {
+			parts[i] = fmt.Sprintf("%q", fmt.Sprintf("%v", item))
+		}
+		return "[]string{" + strings.Join(parts, ", ") + "}"
 	}
 	if len(items) == 0 {
 		return "[]string{}"
 	}
 	parts := make([]string, len(items))
 	for i, item := range items {
-		parts[i] = fmt.Sprintf("%q", fmt.Sprintf("%v", item))
+		parts[i] = fmt.Sprintf("%q", item)
 	}
 	return "[]string{" + strings.Join(parts, ", ") + "}"
 }
@@ -492,7 +610,7 @@ type toolInfo struct {
 // registry is the embedded list of tools from the manifest.
 var registry = []toolInfo{
 {{- range .Tools}}
-	{Name: "{{.Name}}", Description: "{{.Description | esc}}"},
+	{Name: "{{.Name | esc}}", Description: "{{.Description | esc}}"},
 {{- end}}
 }
 
@@ -560,6 +678,9 @@ import (
 {{- if or .HasNonStringArgs .HasNonStringArrayFlags}}
 	"strconv"
 {{- end}}
+{{- if .HasObjectFlags}}
+	"encoding/json"
+{{- end}}
 
 	"github.com/spf13/cobra"
 )
@@ -587,7 +708,7 @@ var (
 func init() {
 {{- range .Flags}}
 {{- if .IsArray}}
-	{{$goName}}Cmd.Flags().StringArrayVar(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatArrayDefault .Default (isStringBase .ArrayBase)}}, "{{.Description | esc}}")
+	{{$goName}}Cmd.Flags().StringArrayVar(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatArrayDefault .Default (isStringBase .ArrayBase)}}, "{{.Description | esc}}{{if .Enum}} (allowed: {{joinEsc .Enum ", "}}){{end}}")
 {{- else}}
 	{{$goName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description | esc}}{{if .Enum}} (allowed: {{joinEsc .Enum ", "}}){{end}}")
 {{- end}}
@@ -663,6 +784,38 @@ var {{.GoName}}Cmd = &cobra.Command{
 		}
 		_ = parsed{{.GoName}}
 {{- end}}
+{{- end}}
+{{- end}}
+{{- range .Flags}}
+{{- if .IsObject}}
+{{- if .IsObjectArray}}
+		var parsed{{.GoName}} []map[string]any
+		if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
+			return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
+		}
+{{- if .HasItemSchema}}
+		for _idx, _elem := range parsed{{.GoName}} {
+			for _, _field := range []string{ {{joinQuoted .ItemSchemaProperties}} } {
+				if _, ok := _elem[_field]; !ok {
+					return fmt.Errorf("--{{.Name}}[%d]: required field %q missing from JSON object", _idx, _field)
+				}
+			}
+		}
+{{- end}}
+{{- else}}
+		var parsed{{.GoName}} map[string]any
+		if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
+			return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
+		}
+{{- if .HasItemSchema}}
+		for _, _field := range []string{ {{joinQuoted .ItemSchemaProperties}} } {
+			if _, ok := parsed{{.GoName}}[_field]; !ok {
+				return fmt.Errorf("--{{.Name}}: required field %q missing from JSON object", _field)
+			}
+		}
+{{- end}}
+{{- end}}
+		_ = parsed{{.GoName}}
 {{- end}}
 {{- end}}
 {{- if $hasAuth}}

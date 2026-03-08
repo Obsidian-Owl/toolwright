@@ -1152,3 +1152,497 @@ func TestSchema_RootTypeIsObject(t *testing.T) {
 	assert.Equal(t, "object", schemaType,
 		"root schema type must be 'object'")
 }
+
+// ---------------------------------------------------------------------------
+// AC-7: Object types (object, object[]) accepted in flag type enum
+// ---------------------------------------------------------------------------
+
+func TestSchema_ObjectFlagTypes(t *testing.T) {
+	makeFlagManifest := func(flagType string) string {
+		flagTypeJSON, _ := json.Marshal(flagType)
+		return `{
+			"apiVersion": "toolwright/v1",
+			"kind": "Toolkit",
+			"metadata": {
+				"name": "test",
+				"version": "1.0.0",
+				"description": "Test"
+			},
+			"tools": [{
+				"name": "run",
+				"description": "Runs something",
+				"entrypoint": "./run.sh",
+				"flags": [{
+					"name": "data",
+					"type": ` + string(flagTypeJSON) + `,
+					"description": "Structured data flag"
+				}]
+			}]
+		}`
+	}
+
+	tests := []struct {
+		name     string
+		flagType string
+		wantErr  bool
+	}{
+		// New object types — must be accepted by the enum
+		{name: "object type", flagType: "object", wantErr: false},
+		{name: "object array type", flagType: "object[]", wantErr: false},
+
+		// Existing scalar types must still pass (regression guard)
+		{name: "string still valid", flagType: "string", wantErr: false},
+		{name: "int still valid", flagType: "int", wantErr: false},
+		{name: "float still valid", flagType: "float", wantErr: false},
+		{name: "bool still valid", flagType: "bool", wantErr: false},
+
+		// Existing array types must still pass (regression guard)
+		{name: "string[] still valid", flagType: "string[]", wantErr: false},
+		{name: "int[] still valid", flagType: "int[]", wantErr: false},
+		{name: "float[] still valid", flagType: "float[]", wantErr: false},
+		{name: "bool[] still valid", flagType: "bool[]", wantErr: false},
+
+		// Invalid types must still be rejected
+		{name: "object[][] double array invalid", flagType: "object[][]", wantErr: true},
+		{name: "Object uppercase invalid", flagType: "Object", wantErr: true},
+		{name: "Object[] uppercase invalid", flagType: "Object[]", wantErr: true},
+		{name: "OBJECT uppercase invalid", flagType: "OBJECT", wantErr: true},
+		{name: "objects plural invalid", flagType: "objects", wantErr: true},
+		{name: "obj abbreviated invalid", flagType: "obj", wantErr: true},
+		{name: "map type invalid", flagType: "map", wantErr: true},
+		{name: "json type invalid", flagType: "json", wantErr: true},
+		{name: "struct type invalid", flagType: "struct", wantErr: true},
+		{name: "unknown still invalid", flagType: "unknown", wantErr: true},
+		{name: "empty still invalid", flagType: "", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateJSON(t, makeFlagManifest(tc.flagType))
+			if tc.wantErr {
+				assert.Error(t, err,
+					"flag.type %q should be rejected by schema enum constraint", tc.flagType)
+			} else {
+				assert.NoError(t, err,
+					"flag.type %q should be accepted by schema enum constraint", tc.flagType)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: Structural — flag type enum in schema includes object and object[]
+// ---------------------------------------------------------------------------
+
+func TestSchema_FlagTypeEnum_IncludesObjectTypes(t *testing.T) {
+	data := loadSchemaBytes(t)
+
+	var parsed map[string]any
+	err := json.Unmarshal(data, &parsed)
+	require.NoError(t, err)
+
+	// Navigate: properties -> tools -> items -> properties -> flags -> items -> properties -> type -> enum
+	props := parsed["properties"].(map[string]any)
+	tools := props["tools"].(map[string]any)
+	toolItems := tools["items"].(map[string]any)
+	toolProps := toolItems["properties"].(map[string]any)
+	flags := toolProps["flags"].(map[string]any)
+	flagItems := flags["items"].(map[string]any)
+	flagProps := flagItems["properties"].(map[string]any)
+	flagType := flagProps["type"].(map[string]any)
+	enumRaw, ok := flagType["enum"].([]any)
+	require.True(t, ok, "flag type must have an 'enum' array in the schema")
+
+	enumValues := make([]string, len(enumRaw))
+	for i, v := range enumRaw {
+		s, ok := v.(string)
+		require.True(t, ok, "each enum element must be a string, got %T at index %d", v, i)
+		enumValues[i] = s
+	}
+
+	assert.Contains(t, enumValues, "object",
+		"flag type enum must include 'object'; got %v", enumValues)
+	assert.Contains(t, enumValues, "object[]",
+		"flag type enum must include 'object[]'; got %v", enumValues)
+
+	// Verify all original types are still present (regression)
+	for _, expected := range []string{"string", "int", "float", "bool", "string[]", "int[]", "float[]", "bool[]"} {
+		assert.Contains(t, enumValues, expected,
+			"flag type enum must still include %q; got %v", expected, enumValues)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: itemSchema property accepted on flag definitions
+// ---------------------------------------------------------------------------
+
+func TestSchema_ObjectFlag_WithItemSchema(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+	}{
+		{
+			name: "object flag with simple itemSchema",
+			json: `{
+				"apiVersion": "toolwright/v1",
+				"kind": "Toolkit",
+				"metadata": {
+					"name": "test",
+					"version": "1.0.0",
+					"description": "Test"
+				},
+				"tools": [{
+					"name": "run",
+					"description": "Runs something",
+					"entrypoint": "./run.sh",
+					"flags": [{
+						"name": "config",
+						"type": "object",
+						"description": "Configuration object",
+						"itemSchema": {
+							"type": "object",
+							"properties": {
+								"name": {"type": "string"}
+							}
+						}
+					}]
+				}]
+			}`,
+		},
+		{
+			name: "object flag with nested properties in itemSchema",
+			json: `{
+				"apiVersion": "toolwright/v1",
+				"kind": "Toolkit",
+				"metadata": {
+					"name": "test",
+					"version": "1.0.0",
+					"description": "Test"
+				},
+				"tools": [{
+					"name": "run",
+					"description": "Runs something",
+					"entrypoint": "./run.sh",
+					"flags": [{
+						"name": "filter",
+						"type": "object",
+						"description": "Filter criteria",
+						"itemSchema": {
+							"type": "object",
+							"properties": {
+								"field": {"type": "string"},
+								"operator": {"type": "string"},
+								"value": {"type": "number"}
+							},
+							"required": ["field", "operator"]
+						}
+					}]
+				}]
+			}`,
+		},
+		{
+			name: "object[] flag with itemSchema",
+			json: `{
+				"apiVersion": "toolwright/v1",
+				"kind": "Toolkit",
+				"metadata": {
+					"name": "test",
+					"version": "1.0.0",
+					"description": "Test"
+				},
+				"tools": [{
+					"name": "run",
+					"description": "Runs something",
+					"entrypoint": "./run.sh",
+					"flags": [{
+						"name": "items",
+						"type": "object[]",
+						"description": "List of items",
+						"itemSchema": {
+							"type": "object",
+							"properties": {
+								"id": {"type": "integer"},
+								"label": {"type": "string"}
+							}
+						}
+					}]
+				}]
+			}`,
+		},
+		{
+			name: "itemSchema with empty properties object",
+			json: `{
+				"apiVersion": "toolwright/v1",
+				"kind": "Toolkit",
+				"metadata": {
+					"name": "test",
+					"version": "1.0.0",
+					"description": "Test"
+				},
+				"tools": [{
+					"name": "run",
+					"description": "Runs something",
+					"entrypoint": "./run.sh",
+					"flags": [{
+						"name": "data",
+						"type": "object",
+						"description": "Open-ended data",
+						"itemSchema": {
+							"type": "object",
+							"properties": {}
+						}
+					}]
+				}]
+			}`,
+		},
+		{
+			name: "itemSchema with minimal content",
+			json: `{
+				"apiVersion": "toolwright/v1",
+				"kind": "Toolkit",
+				"metadata": {
+					"name": "test",
+					"version": "1.0.0",
+					"description": "Test"
+				},
+				"tools": [{
+					"name": "run",
+					"description": "Runs something",
+					"entrypoint": "./run.sh",
+					"flags": [{
+						"name": "payload",
+						"type": "object",
+						"description": "Generic payload",
+						"itemSchema": {
+							"type": "object"
+						}
+					}]
+				}]
+			}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateJSON(t, tc.json)
+			assert.NoError(t, err,
+				"manifest with flag itemSchema should pass schema validation")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: itemSchema accepted on non-object flag types (schema does not
+// enforce the type/itemSchema relationship — that is the Go validator's job)
+// ---------------------------------------------------------------------------
+
+func TestSchema_ItemSchema_OnNonObjectType(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagType string
+	}{
+		{name: "string with itemSchema", flagType: "string"},
+		{name: "int with itemSchema", flagType: "int"},
+		{name: "bool with itemSchema", flagType: "bool"},
+		{name: "string[] with itemSchema", flagType: "string[]"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			flagTypeJSON, _ := json.Marshal(tc.flagType)
+			manifest := `{
+				"apiVersion": "toolwright/v1",
+				"kind": "Toolkit",
+				"metadata": {
+					"name": "test",
+					"version": "1.0.0",
+					"description": "Test"
+				},
+				"tools": [{
+					"name": "run",
+					"description": "Runs something",
+					"entrypoint": "./run.sh",
+					"flags": [{
+						"name": "field",
+						"type": ` + string(flagTypeJSON) + `,
+						"description": "Some flag",
+						"itemSchema": {
+							"type": "object",
+							"properties": {
+								"key": {"type": "string"}
+							}
+						}
+					}]
+				}]
+			}`
+			err := validateJSON(t, manifest)
+			assert.NoError(t, err,
+				"itemSchema on flag type %q should be accepted by JSON Schema (relationship enforcement is Go validator's job)", tc.flagType)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: Object type without itemSchema passes schema validation
+// ---------------------------------------------------------------------------
+
+func TestSchema_ObjectType_WithoutItemSchema(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagType string
+	}{
+		{name: "object without itemSchema", flagType: "object"},
+		{name: "object[] without itemSchema", flagType: "object[]"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			flagTypeJSON, _ := json.Marshal(tc.flagType)
+			manifest := `{
+				"apiVersion": "toolwright/v1",
+				"kind": "Toolkit",
+				"metadata": {
+					"name": "test",
+					"version": "1.0.0",
+					"description": "Test"
+				},
+				"tools": [{
+					"name": "run",
+					"description": "Runs something",
+					"entrypoint": "./run.sh",
+					"flags": [{
+						"name": "data",
+						"type": ` + string(flagTypeJSON) + `,
+						"description": "Structured data without schema"
+					}]
+				}]
+			}`
+			err := validateJSON(t, manifest)
+			assert.NoError(t, err,
+				"flag type %q without itemSchema should pass schema validation", tc.flagType)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: Structural — flag properties include itemSchema in the schema
+// ---------------------------------------------------------------------------
+
+func TestSchema_FlagProperties_IncludesItemSchema(t *testing.T) {
+	data := loadSchemaBytes(t)
+
+	var parsed map[string]any
+	err := json.Unmarshal(data, &parsed)
+	require.NoError(t, err)
+
+	// Navigate: properties -> tools -> items -> properties -> flags -> items -> properties
+	props := parsed["properties"].(map[string]any)
+	tools := props["tools"].(map[string]any)
+	toolItems := tools["items"].(map[string]any)
+	toolProps := toolItems["properties"].(map[string]any)
+	flags := toolProps["flags"].(map[string]any)
+	flagItems := flags["items"].(map[string]any)
+	flagProps, ok := flagItems["properties"].(map[string]any)
+	require.True(t, ok, "flag items must have a 'properties' object")
+
+	_, hasItemSchema := flagProps["itemSchema"]
+	assert.True(t, hasItemSchema,
+		"flag properties must include 'itemSchema'; got keys: %v", keys(flagProps))
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: itemSchema must be an object type in the schema definition
+// ---------------------------------------------------------------------------
+
+func TestSchema_ItemSchema_IsObjectType(t *testing.T) {
+	data := loadSchemaBytes(t)
+
+	var parsed map[string]any
+	err := json.Unmarshal(data, &parsed)
+	require.NoError(t, err)
+
+	// Navigate: properties -> tools -> items -> properties -> flags -> items -> properties -> itemSchema
+	props := parsed["properties"].(map[string]any)
+	tools := props["tools"].(map[string]any)
+	toolItems := tools["items"].(map[string]any)
+	toolProps := toolItems["properties"].(map[string]any)
+	flags := toolProps["flags"].(map[string]any)
+	flagItems := flags["items"].(map[string]any)
+	flagProps := flagItems["properties"].(map[string]any)
+
+	itemSchemaRaw, ok := flagProps["itemSchema"]
+	require.True(t, ok, "flag properties must include 'itemSchema'")
+
+	itemSchemaDef, ok := itemSchemaRaw.(map[string]any)
+	require.True(t, ok, "itemSchema definition must be a JSON object, got %T", itemSchemaRaw)
+
+	schemaType, ok := itemSchemaDef["type"]
+	require.True(t, ok, "itemSchema definition must have a 'type' field")
+	assert.Equal(t, "object", schemaType,
+		"itemSchema must be typed as 'object' in the schema definition")
+}
+
+// ---------------------------------------------------------------------------
+// AC-7: Multiple object flags in the same tool pass validation
+// ---------------------------------------------------------------------------
+
+func TestSchema_MultipleObjectFlags(t *testing.T) {
+	manifest := `{
+		"apiVersion": "toolwright/v1",
+		"kind": "Toolkit",
+		"metadata": {
+			"name": "test",
+			"version": "1.0.0",
+			"description": "Test"
+		},
+		"tools": [{
+			"name": "run",
+			"description": "Runs something",
+			"entrypoint": "./run.sh",
+			"flags": [
+				{
+					"name": "config",
+					"type": "object",
+					"description": "Config object",
+					"itemSchema": {
+						"type": "object",
+						"properties": {
+							"host": {"type": "string"},
+							"port": {"type": "integer"}
+						}
+					}
+				},
+				{
+					"name": "tags",
+					"type": "object[]",
+					"description": "Tag objects",
+					"itemSchema": {
+						"type": "object",
+						"properties": {
+							"key": {"type": "string"},
+							"value": {"type": "string"}
+						}
+					}
+				},
+				{
+					"name": "verbose",
+					"type": "bool",
+					"description": "Verbose output"
+				}
+			]
+		}]
+	}`
+
+	err := validateJSON(t, manifest)
+	assert.NoError(t, err,
+		"manifest with multiple object flags alongside scalar flags should pass schema validation")
+}
+
+// keys is a test helper that returns sorted map keys for readable error messages.
+func keys(m map[string]any) []string {
+	result := make([]string, 0, len(m))
+	for k := range m {
+		result = append(result, k)
+	}
+	return result
+}

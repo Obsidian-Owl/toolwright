@@ -1490,3 +1490,653 @@ func TestTSMCP_EmptyToolsSlice(t *testing.T) {
 			"empty tools manifest should not produce auth file %q", f.Path)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// AC-12: itemSchemaToZod converts common JSON Schema
+// ---------------------------------------------------------------------------
+
+// mcpManifestObjectFlagWithSchema returns a manifest with a single tool that has
+// an object-typed flag with an itemSchema. Useful for AC-12/AC-14 tests.
+func mcpManifestObjectFlagWithSchema(flagType string, required bool, schema map[string]any) manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "object-schema-server",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "obj_tool",
+				Description: "Tool with object flag",
+				Entrypoint:  "./obj.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "config",
+						Type:        flagType,
+						Required:    required,
+						Description: "structured config",
+						ItemSchema:  schema,
+					},
+				},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+}
+
+func TestTSMCP_Object_AC12_PrimitiveSchemaTypes(t *testing.T) {
+	// Table-driven: each JSON Schema primitive type must map to the correct
+	// Zod expression when used as a property inside an object itemSchema.
+	// We test as properties inside an object rather than top-level because
+	// top-level {"type": "string"} is indistinguishable from the zodType()
+	// fallback for "object" type. Testing inside properties proves the
+	// converter recurses correctly.
+	tests := []struct {
+		name       string
+		propSchema map[string]any
+		wantZod    string
+	}{
+		{
+			name:       "string property",
+			propSchema: map[string]any{"type": "string"},
+			wantZod:    "z.string()",
+		},
+		{
+			name:       "number property",
+			propSchema: map[string]any{"type": "number"},
+			wantZod:    "z.number()",
+		},
+		{
+			name:       "integer property maps to z.number()",
+			propSchema: map[string]any{"type": "integer"},
+			wantZod:    "z.number()",
+		},
+		{
+			name:       "boolean property",
+			propSchema: map[string]any{"type": "boolean"},
+			wantZod:    "z.boolean()",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"prop": tc.propSchema,
+				},
+			}
+			m := mcpManifestObjectFlagWithSchema("object", true, schema)
+			files := generateTSMCP(t, m)
+			content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+			// The config flag line must NOT use z.string() as its Zod expression
+			// (which is what the zodType() fallback produces for unknown types).
+			// Instead it must contain z.object() from the itemSchema conversion.
+			lines := strings.Split(content, "\n")
+			var configLine string
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "config:") {
+					configLine = trimmed
+					break
+				}
+			}
+			require.NotEmpty(t, configLine,
+				"generated output must have a line starting with 'config:' for the object flag")
+			assert.Contains(t, configLine, "z.object(",
+				"config flag line must use z.object() from itemSchema, not z.string() from zodType fallback")
+
+			// The inner property "prop" must appear as its own line with the correct Zod type
+			var propLine string
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "prop:") {
+					propLine = trimmed
+					break
+				}
+			}
+			require.NotEmpty(t, propLine,
+				"generated output must have a line starting with 'prop:' for the schema property")
+			assert.Contains(t, propLine, tc.wantZod,
+				"property 'prop' line must contain %q", tc.wantZod)
+		})
+	}
+}
+
+func TestTSMCP_Object_AC12_ObjectWithProperties(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	// Must contain z.object
+	assert.Contains(t, content, "z.object(",
+		"object schema with properties must emit z.object(...)")
+	// Must contain the property name
+	assert.Contains(t, content, "name:",
+		"object schema property 'name' must appear in generated Zod schema")
+	// Must contain z.string() for the name property
+	assert.Contains(t, content, "z.string()",
+		"object schema property 'name' with type:string must emit z.string()")
+}
+
+func TestTSMCP_Object_AC12_ObjectRequiredVsOptionalProperties(t *testing.T) {
+	// Schema has two properties: "name" is required, "age" is not.
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+			"age":  map[string]any{"type": "number"},
+		},
+		"required": []any{"name"},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	// The "name" property is required, so it must NOT have .optional()
+	// The "age" property is NOT required, so it MUST have .optional()
+	assert.Contains(t, content, "z.object(",
+		"must emit z.object for object schema with properties")
+
+	// We need to verify that "age" has .optional() but "name" does not.
+	// Extract the lines for each property to verify independently.
+	lines := strings.Split(content, "\n")
+	var nameLine, ageLine string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "name:") {
+			nameLine = trimmed
+		}
+		if strings.HasPrefix(trimmed, "age:") {
+			ageLine = trimmed
+		}
+	}
+
+	require.NotEmpty(t, nameLine,
+		"generated output must contain a line starting with 'name:' for the name property")
+	require.NotEmpty(t, ageLine,
+		"generated output must contain a line starting with 'age:' for the age property")
+
+	assert.NotContains(t, nameLine, ".optional()",
+		"required property 'name' must NOT have .optional()")
+	assert.Contains(t, ageLine, ".optional()",
+		"non-required property 'age' MUST have .optional()")
+}
+
+func TestTSMCP_Object_AC12_ArrayWithItems(t *testing.T) {
+	schema := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "string",
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	assert.Contains(t, content, "z.array(z.string())",
+		"array schema with items:{type:string} must emit z.array(z.string())")
+}
+
+func TestTSMCP_Object_AC12_NestedObjectWithArray(t *testing.T) {
+	// Object with a property "tags" that is an array of strings.
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"tags": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "string",
+				},
+			},
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	assert.Contains(t, content, "z.object(",
+		"nested schema must emit z.object()")
+	assert.Contains(t, content, "z.array(z.string())",
+		"nested array property must emit z.array(z.string())")
+	assert.Contains(t, content, "tags:",
+		"nested schema must include property name 'tags'")
+}
+
+func TestTSMCP_Object_AC12_MultipleProperties_AllPresent(t *testing.T) {
+	// Ensure all properties appear, not just the first or last.
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"host":    map[string]any{"type": "string"},
+			"port":    map[string]any{"type": "integer"},
+			"verbose": map[string]any{"type": "boolean"},
+		},
+		"required": []any{"host", "port"},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	// All three properties must appear in the generated schema.
+	assert.Contains(t, content, "host:",
+		"property 'host' must appear in generated schema")
+	assert.Contains(t, content, "port:",
+		"property 'port' must appear in generated schema")
+	assert.Contains(t, content, "verbose:",
+		"property 'verbose' must appear in generated schema")
+
+	// Verify correct types for each
+	assert.Contains(t, content, "z.string()",
+		"host property must use z.string()")
+	assert.Contains(t, content, "z.number()",
+		"port property must use z.number()")
+	assert.Contains(t, content, "z.boolean()",
+		"verbose property must use z.boolean()")
+
+	// verbose is not required, so it must be optional
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "verbose:") {
+			assert.Contains(t, trimmed, ".optional()",
+				"non-required property 'verbose' must have .optional()")
+		}
+		if strings.HasPrefix(trimmed, "host:") {
+			assert.NotContains(t, trimmed, ".optional()",
+				"required property 'host' must NOT have .optional()")
+		}
+	}
+}
+
+func TestTSMCP_Object_AC12_NestedObject_InnerObject(t *testing.T) {
+	// Object containing another object property.
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"address": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	// Must contain nested z.object
+	assert.Contains(t, content, "address:",
+		"nested object property 'address' must appear in schema")
+	assert.Contains(t, content, "city:",
+		"deeply nested property 'city' must appear in schema")
+
+	// Count z.object occurrences: outer schema + inner address = at least 2
+	// (the tool's top-level inputSchema z.object is separate from itemSchema)
+	zodObjectCount := strings.Count(content, "z.object(")
+	assert.GreaterOrEqual(t, zodObjectCount, 2,
+		"nested object schema must produce at least 2 z.object() calls: "+
+			"one for the outer object, one for the inner 'address' object (got %d)", zodObjectCount)
+}
+
+// ---------------------------------------------------------------------------
+// AC-13: Object flag without itemSchema emits z.record
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_Object_AC13_ObjectNoSchema_EmitsZRecord(t *testing.T) {
+	// type: "object" with no ItemSchema must produce z.record(z.unknown())
+	m := mcpManifestObjectFlagWithSchema("object", true, nil)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	assert.Contains(t, content, "z.record(z.unknown())",
+		"object flag with no itemSchema must emit z.record(z.unknown())")
+	// Must NOT contain z.string() for the config flag — that would mean the
+	// object type fell through to the default string case.
+	// We check that the config flag line specifically uses z.record, not z.string.
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "config:") {
+			assert.Contains(t, trimmed, "z.record(",
+				"config flag line must use z.record(), not z.string()")
+			assert.NotContains(t, trimmed, "z.string()",
+				"config flag line must NOT use z.string() for object type")
+			break
+		}
+	}
+}
+
+func TestTSMCP_Object_AC13_ObjectNoSchema_EmptyMapEqualsNil(t *testing.T) {
+	// Empty ItemSchema (not nil, but empty map) should also emit z.record
+	m := mcpManifestObjectFlagWithSchema("object", true, map[string]any{})
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	assert.Contains(t, content, "z.record(z.unknown())",
+		"object flag with empty itemSchema must emit z.record(z.unknown())")
+}
+
+func TestTSMCP_Object_AC13_ObjectArrayNoSchema_EmitsZArrayZRecord(t *testing.T) {
+	// type: "object[]" with no ItemSchema must produce z.array(z.record(z.unknown()))
+	m := mcpManifestObjectFlagWithSchema("object[]", true, nil)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	assert.Contains(t, content, "z.array(z.record(z.unknown()))",
+		"object[] flag with no itemSchema must emit z.array(z.record(z.unknown()))")
+}
+
+func TestTSMCP_Object_AC13_ObjectArrayNoSchema_NotJustZRecord(t *testing.T) {
+	// Verify object[] doesn't just emit z.record without the z.array wrapper.
+	m := mcpManifestObjectFlagWithSchema("object[]", true, nil)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "config:") {
+			assert.Contains(t, trimmed, "z.array(",
+				"object[] flag line must be wrapped in z.array()")
+			break
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-14: Object[] flag with itemSchema wraps in z.array
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_Object_AC14_ObjectArrayWithSchema_EmitsZArrayZObject(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id":   map[string]any{"type": "integer"},
+			"name": map[string]any{"type": "string"},
+		},
+		"required": []any{"id"},
+	}
+	m := mcpManifestObjectFlagWithSchema("object[]", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	// Must wrap the converted object schema in z.array(...)
+	assert.Contains(t, content, "z.array(z.object(",
+		"object[] with itemSchema must emit z.array(z.object(...))")
+
+	// The inner properties must still be present
+	assert.Contains(t, content, "id:",
+		"object[] schema property 'id' must appear")
+	assert.Contains(t, content, "name:",
+		"object[] schema property 'name' must appear")
+}
+
+func TestTSMCP_Object_AC14_ObjectArrayWithSchema_InnerRequiredOptional(t *testing.T) {
+	// Even within the array wrapper, required/optional distinction on inner
+	// properties must be respected.
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id":    map[string]any{"type": "integer"},
+			"label": map[string]any{"type": "string"},
+		},
+		"required": []any{"id"},
+	}
+	m := mcpManifestObjectFlagWithSchema("object[]", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	lines := strings.Split(content, "\n")
+	var idLine, labelLine string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "id:") {
+			idLine = trimmed
+		}
+		if strings.HasPrefix(trimmed, "label:") {
+			labelLine = trimmed
+		}
+	}
+
+	require.NotEmpty(t, idLine, "must have line for property 'id'")
+	require.NotEmpty(t, labelLine, "must have line for property 'label'")
+
+	assert.NotContains(t, idLine, ".optional()",
+		"required property 'id' in object[] schema must NOT have .optional()")
+	assert.Contains(t, labelLine, ".optional()",
+		"non-required property 'label' in object[] schema MUST have .optional()")
+}
+
+func TestTSMCP_Object_AC14_ObjectArrayWithSchema_NotDoubleWrapped(t *testing.T) {
+	// Verify the output contains exactly one z.array wrapping (not z.array(z.array(...)))
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"x": map[string]any{"type": "number"},
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object[]", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	assert.NotContains(t, content, "z.array(z.array(",
+		"object[] must not double-wrap in z.array(z.array(...))")
+}
+
+// ---------------------------------------------------------------------------
+// Cross-cutting: object flag with itemSchema uses converted result
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_Object_CrossCutting_ObjectWithSchema_UsesConvertedSchema(t *testing.T) {
+	// type: "object" WITH itemSchema must use the converted schema, not z.record.
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"key": map[string]any{"type": "string"},
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	// Must NOT emit z.record — should use the itemSchema conversion instead.
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "config:") {
+			assert.NotContains(t, trimmed, "z.record(",
+				"object flag WITH itemSchema must NOT emit z.record(); must use itemSchemaToZod")
+			assert.Contains(t, trimmed, "z.object(",
+				"object flag WITH itemSchema must emit z.object()")
+			break
+		}
+	}
+}
+
+func TestTSMCP_Object_CrossCutting_RequiredObjectFlag_NoOptional(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"val": map[string]any{"type": "string"},
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", true, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "config:") {
+			assert.Contains(t, trimmed, "z.object(",
+				"required object flag with schema must use z.object(), not z.string()")
+			assert.NotContains(t, trimmed, ".optional()",
+				"required object flag must NOT have .optional()")
+			break
+		}
+	}
+}
+
+func TestTSMCP_Object_CrossCutting_OptionalObjectFlag_HasOptional(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"val": map[string]any{"type": "string"},
+		},
+	}
+	m := mcpManifestObjectFlagWithSchema("object", false, schema)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "config:") {
+			assert.Contains(t, trimmed, "z.object(",
+				"optional object flag with schema must use z.object(), not z.string()")
+			assert.Contains(t, trimmed, ".optional()",
+				"optional object flag MUST have .optional()")
+			break
+		}
+	}
+}
+
+func TestTSMCP_Object_CrossCutting_MixedScalarAndObjectFlags(t *testing.T) {
+	// A tool with both a scalar flag and an object flag: each must use the
+	// correct Zod expression. Scalars use zodType(), objects use itemSchemaToZod()
+	// or z.record().
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "mixed-flag-server",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "mixed_tool",
+				Description: "Tool with mixed flags",
+				Entrypoint:  "./mixed.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "count",
+						Type:        "int",
+						Required:    true,
+						Description: "a scalar int flag",
+					},
+					{
+						Name:        "metadata",
+						Type:        "object",
+						Required:    false,
+						Description: "an unstructured object flag",
+					},
+					{
+						Name:        "options",
+						Type:        "object",
+						Required:    true,
+						Description: "a structured object flag",
+						ItemSchema: map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"debug": map[string]any{"type": "boolean"},
+							},
+						},
+					},
+				},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/mixed_tool.ts")
+
+	lines := strings.Split(content, "\n")
+	var countLine, metadataLine, optionsLine string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "count:") {
+			countLine = trimmed
+		}
+		if strings.HasPrefix(trimmed, "metadata:") {
+			metadataLine = trimmed
+		}
+		if strings.HasPrefix(trimmed, "options:") {
+			optionsLine = trimmed
+		}
+	}
+
+	require.NotEmpty(t, countLine, "must have line for scalar flag 'count'")
+	require.NotEmpty(t, metadataLine, "must have line for unstructured object flag 'metadata'")
+	require.NotEmpty(t, optionsLine, "must have line for structured object flag 'options'")
+
+	// Scalar flag: z.number(), no z.record or z.object
+	assert.Contains(t, countLine, "z.number()",
+		"scalar int flag must use z.number()")
+
+	// Unstructured object (no itemSchema): z.record(z.unknown())
+	assert.Contains(t, metadataLine, "z.record(z.unknown())",
+		"unstructured object flag must use z.record(z.unknown())")
+
+	// Structured object (with itemSchema): z.object(...)
+	assert.Contains(t, optionsLine, "z.object(",
+		"structured object flag must use z.object()")
+}
+
+func TestTSMCP_Object_CrossCutting_OptionalObjectRecord_HasOptional(t *testing.T) {
+	// An optional object flag with no schema must emit z.record(z.unknown()).optional()
+	m := mcpManifestObjectFlagWithSchema("object", false, nil)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "config:") {
+			assert.Contains(t, trimmed, "z.record(z.unknown()).optional()",
+				"optional object flag with no schema must emit z.record(z.unknown()).optional()")
+			break
+		}
+	}
+}
+
+func TestTSMCP_Object_CrossCutting_RequiredObjectRecord_NoOptional(t *testing.T) {
+	// A required object flag with no schema must emit z.record(z.unknown()) without .optional()
+	m := mcpManifestObjectFlagWithSchema("object", true, nil)
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/obj_tool.ts")
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "config:") {
+			assert.Contains(t, trimmed, "z.record(z.unknown())",
+				"required object flag with no schema must use z.record(z.unknown())")
+			assert.NotContains(t, trimmed, ".optional()",
+				"required object flag must NOT have .optional()")
+			break
+		}
+	}
+}
