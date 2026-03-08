@@ -543,7 +543,7 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
 {{- end}}
   // TODO: implement {{.ToolName}} logic
   return {
-    content: [{ type: "text", text: "{{.ToolName}} executed" }],
+    content: [{ type: "text", text: "{{.ToolName | esc}} executed" }],
   };
 }
 
@@ -552,7 +552,7 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
  */
 export function register(server: McpServer): void {
   server.tool(
-    "{{.ToolName}}",
+    "{{.ToolName | esc}}",
     "{{.Description | esc}}",
     inputSchema.shape,
     async (input: {{.ToolName}}Input) => {
@@ -580,7 +580,7 @@ interface ToolEntry {
 // Registry of all available tools with their names and descriptions
 const toolRegistry: ToolEntry[] = [
 {{- range .Tools}}
-  { name: "{{.Name}}", description: "{{.Description | esc}}" },
+  { name: "{{.Name | esc}}", description: "{{.Description | esc}}" },
 {{- end}}
 ];
 

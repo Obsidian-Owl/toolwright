@@ -62,11 +62,16 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	// Structural validation.
 	for _, ve := range manifest.Validate(tk) {
-		errs = append(errs, validateItem{
+		item := validateItem{
 			Path:    ve.Path,
 			Message: ve.Message,
 			Rule:    ve.Rule,
-		})
+		}
+		if ve.Severity == manifest.SeverityWarning {
+			warns = append(warns, item)
+		} else {
+			errs = append(errs, item)
+		}
 	}
 	debugLog(cmd, "structural validation: %d errors", len(errs))
 
@@ -126,6 +131,9 @@ func runValidate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Human output.
+	for _, w := range result.Warnings {
+		fmt.Fprintf(cmd.OutOrStdout(), "warning [%s] %s: %s\n", w.Rule, w.Path, w.Message)
+	}
 	if result.Valid {
 		fmt.Fprintf(cmd.OutOrStdout(), "valid: %s (%s)\n", path, tk.Metadata.Name)
 		return nil

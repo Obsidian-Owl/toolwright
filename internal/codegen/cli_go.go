@@ -20,7 +20,7 @@ var validToolName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
 // escStringLiteral escapes a string for safe interpolation inside a
 // double-quoted Go or JavaScript/TypeScript string literal.
 func escStringLiteral(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`)
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "\x00", `\x00`)
 	return r.Replace(s)
 }
 
@@ -573,7 +573,7 @@ type toolInfo struct {
 // registry is the embedded list of tools from the manifest.
 var registry = []toolInfo{
 {{- range .Tools}}
-	{Name: "{{.Name}}", Description: "{{.Description | esc}}"},
+	{Name: "{{.Name | esc}}", Description: "{{.Description | esc}}"},
 {{- end}}
 }
 

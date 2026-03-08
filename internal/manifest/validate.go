@@ -27,6 +27,14 @@ type ValidationError struct {
 var (
 	nameRe   = regexp.MustCompile(`^[a-z0-9-]+$`)
 	semverRe = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?(\+[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?$`)
+	// flagNameRe validates flag and arg names: must start with a letter and
+	// contain only alphanumerics, hyphens, or underscores. This is a security
+	// boundary — flag/arg names are interpolated into generated code.
+	flagNameRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+	// propertyNameRe validates JSON Schema property names: must be valid
+	// JavaScript identifiers. This prevents code injection into generated
+	// TypeScript (buildZodObject) where property names are emitted unquoted.
+	propertyNameRe = regexp.MustCompile(`^[a-zA-Z_$][a-zA-Z0-9_$]*$`)
 )
 
 // validFlagTypes is the complete set of recognised flag types.
@@ -131,9 +139,17 @@ func validateTools(tools []Tool) []ValidationError {
 func validateTool(tool Tool, prefix string) []ValidationError {
 	var errs []ValidationError
 
-	// Duplicate arg names.
+	// Validate and deduplicate arg names.
 	seenArgs := make(map[string]bool)
-	for _, arg := range tool.Args {
+	for i, arg := range tool.Args {
+		if !flagNameRe.MatchString(arg.Name) {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("%s.args[%d].name", prefix, i),
+				Message:  fmt.Sprintf("arg name %q must match ^[a-zA-Z][a-zA-Z0-9_-]*$", arg.Name),
+				Rule:     "name-format",
+				Severity: SeverityError,
+			})
+		}
 		if seenArgs[arg.Name] {
 			errs = append(errs, ValidationError{
 				Path:     prefix + ".args",
@@ -145,9 +161,17 @@ func validateTool(tool Tool, prefix string) []ValidationError {
 		seenArgs[arg.Name] = true
 	}
 
-	// Duplicate flag names.
+	// Validate and deduplicate flag names.
 	seenFlags := make(map[string]bool)
-	for _, flag := range tool.Flags {
+	for i, flag := range tool.Flags {
+		if !flagNameRe.MatchString(flag.Name) {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("%s.flags[%d].name", prefix, i),
+				Message:  fmt.Sprintf("flag name %q must match ^[a-zA-Z][a-zA-Z0-9_-]*$", flag.Name),
+				Rule:     "name-format",
+				Severity: SeverityError,
+			})
+		}
 		if seenFlags[flag.Name] {
 			errs = append(errs, ValidationError{
 				Path:     prefix + ".flags",
@@ -304,10 +328,22 @@ var validJSONSchemaTypes = map[string]bool{
 	"array": true, "number": true, "string": true, "integer": true,
 }
 
+// maxItemSchemaDepth is the maximum nesting depth for JSON Schema validation.
+// Prevents stack overflow from pathologically nested schemas.
+const maxItemSchemaDepth = 64
+
 // checkItemSchemaTypeValues recursively validates that all "type" values in a
 // JSON Schema map use valid JSON Schema types (per draft 2020-12). Returns an
-// error describing the first invalid type found.
+// error describing the first invalid type found. Depth is limited to
+// maxItemSchemaDepth to prevent stack overflow.
 func checkItemSchemaTypeValues(schema map[string]any) error {
+	return checkItemSchemaTypeValuesDepth(schema, 0)
+}
+
+func checkItemSchemaTypeValuesDepth(schema map[string]any, depth int) error {
+	if depth > maxItemSchemaDepth {
+		return fmt.Errorf("JSON Schema exceeds maximum nesting depth of %d", maxItemSchemaDepth)
+	}
 	if t, ok := schema["type"]; ok {
 		switch tv := t.(type) {
 		case string:
@@ -328,7 +364,7 @@ func checkItemSchemaTypeValues(schema map[string]any) error {
 			if subMap, ok := sub.(map[string]any); ok {
 				for _, v := range subMap {
 					if subSchema, ok := v.(map[string]any); ok {
-						if err := checkItemSchemaTypeValues(subSchema); err != nil {
+						if err := checkItemSchemaTypeValuesDepth(subSchema, depth+1); err != nil {
 							return err
 						}
 					}
@@ -340,7 +376,7 @@ func checkItemSchemaTypeValues(schema map[string]any) error {
 		"unevaluatedItems", "unevaluatedProperties", "propertyNames", "contains"} {
 		if sub, ok := schema[key]; ok {
 			if subSchema, ok := sub.(map[string]any); ok {
-				if err := checkItemSchemaTypeValues(subSchema); err != nil {
+				if err := checkItemSchemaTypeValuesDepth(subSchema, depth+1); err != nil {
 					return err
 				}
 			}
@@ -351,7 +387,7 @@ func checkItemSchemaTypeValues(schema map[string]any) error {
 			if subArr, ok := sub.([]any); ok {
 				for _, item := range subArr {
 					if subSchema, ok := item.(map[string]any); ok {
-						if err := checkItemSchemaTypeValues(subSchema); err != nil {
+						if err := checkItemSchemaTypeValuesDepth(subSchema, depth+1); err != nil {
 							return err
 						}
 					}
@@ -391,6 +427,17 @@ func validateItemSchema(flag Flag, prefix string) []ValidationError {
 		}}
 	}
 
+	// Validate property names are safe identifiers (prevents code injection
+	// into generated TypeScript where property names are emitted unquoted).
+	if err := validatePropertyNames(flag.ItemSchema, 0); err != nil {
+		return []ValidationError{{
+			Path:     prefix + ".itemSchema",
+			Message:  fmt.Sprintf("itemSchema has an invalid property name: %v", err),
+			Rule:     "invalid-property-name",
+			Severity: SeverityError,
+		}}
+	}
+
 	// Validate type values in the schema recursively.
 	if err := checkItemSchemaTypeValues(flag.ItemSchema); err != nil {
 		return []ValidationError{{
@@ -422,6 +469,54 @@ func validateItemSchema(flag Flag, prefix string) []ValidationError {
 		}}
 	}
 
+	return nil
+}
+
+// validatePropertyNames recursively checks that all property keys in a JSON
+// Schema are valid JavaScript identifiers. This is a security boundary:
+// property names from itemSchema are emitted unquoted into generated TypeScript
+// code (buildZodObject), so malicious names could inject arbitrary code.
+func validatePropertyNames(schema map[string]any, depth int) error {
+	if depth > maxItemSchemaDepth {
+		return fmt.Errorf("schema exceeds maximum nesting depth of %d", maxItemSchemaDepth)
+	}
+	// Check "properties" keys.
+	if propsRaw, ok := schema["properties"]; ok {
+		if props, ok := propsRaw.(map[string]any); ok {
+			for name, v := range props {
+				if !propertyNameRe.MatchString(name) {
+					return fmt.Errorf("property name %q must be a valid identifier matching ^[a-zA-Z_$][a-zA-Z0-9_$]*$", name)
+				}
+				if subSchema, ok := v.(map[string]any); ok {
+					if err := validatePropertyNames(subSchema, depth+1); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	// Recurse into "items" (array schemas).
+	if items, ok := schema["items"]; ok {
+		if subSchema, ok := items.(map[string]any); ok {
+			if err := validatePropertyNames(subSchema, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	// Recurse into composition keywords.
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		if sub, ok := schema[key]; ok {
+			if subArr, ok := sub.([]any); ok {
+				for _, item := range subArr {
+					if subSchema, ok := item.(map[string]any); ok {
+						if err := validatePropertyNames(subSchema, depth+1); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 
