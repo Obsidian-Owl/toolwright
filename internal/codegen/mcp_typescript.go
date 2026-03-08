@@ -4,12 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"text/template"
 
 	"github.com/Obsidian-Owl/toolwright/internal/manifest"
 )
+
+// uriParamRe matches {param} placeholders in a URI template.
+var uriParamRe = regexp.MustCompile(`\{([^}]+)\}`)
+
+// extractURIParams returns the list of parameter names found in a URI template.
+func extractURIParams(uri string) []string {
+	matches := uriParamRe.FindAllStringSubmatch(uri, -1)
+	params := make([]string, 0, len(matches))
+	for _, m := range matches {
+		params = append(params, m[1])
+	}
+	return params
+}
 
 // TSMCPGenerator generates TypeScript MCP server projects.
 type TSMCPGenerator struct{}
@@ -64,6 +78,34 @@ func (g *TSMCPGenerator) Generate(ctx context.Context, data TemplateData, _ stri
 		files = append(files, GeneratedFile{
 			Path:    "src/tools/" + tool.Name + ".ts",
 			Content: toolFile,
+		})
+	}
+
+	// per-resource handler files
+	for _, res := range m.Resources {
+		if !validToolName.MatchString(res.Name) {
+			return nil, fmt.Errorf("resource name %q contains invalid characters: must match %s", res.Name, validToolName.String())
+		}
+		mimeType := res.MimeType
+		if mimeType == "" {
+			mimeType = "text/plain"
+		}
+		resData := tsResourceData{
+			Name:        res.Name,
+			Description: res.Description,
+			URI:         res.URI,
+			MimeType:    mimeType,
+			Entrypoint:  res.Entrypoint,
+			URIParams:   extractURIParams(res.URI),
+		}
+		var resFile []byte
+		resFile, err = renderTSTemplate("resource.ts", tsResourceTmpl, resData)
+		if err != nil {
+			return nil, fmt.Errorf("rendering resource file for %q: %w", res.Name, err)
+		}
+		files = append(files, GeneratedFile{
+			Path:    "src/resources/" + res.Name + ".ts",
+			Content: resFile,
 		})
 	}
 
@@ -173,9 +215,24 @@ type tsToolData struct {
 	MimeType        string
 }
 
+type tsResourceSummary struct {
+	Name string
+	URI  string
+}
+
+type tsResourceData struct {
+	Name        string
+	Description string
+	URI         string
+	MimeType    string
+	Entrypoint  string
+	URIParams   []string // extracted from URI template {param} patterns
+}
+
 type indexData struct {
 	ToolkitName       string
 	Tools             []tsToolSummary
+	Resources         []tsResourceSummary
 	HasStdio          bool
 	HasStreamableHTTP bool
 }
@@ -365,9 +422,14 @@ func buildIndexData(m manifest.Toolkit, hasStdio, hasStreamableHTTP bool) indexD
 	for i, t := range m.Tools {
 		summaries[i] = tsToolSummary{Name: t.Name, Description: t.Description}
 	}
+	resourceSummaries := make([]tsResourceSummary, len(m.Resources))
+	for i, r := range m.Resources {
+		resourceSummaries[i] = tsResourceSummary{Name: r.Name, URI: r.URI}
+	}
 	return indexData{
 		ToolkitName:       m.Metadata.Name,
 		Tools:             summaries,
+		Resources:         resourceSummaries,
 		HasStdio:          hasStdio,
 		HasStreamableHTTP: hasStreamableHTTP,
 	}
@@ -529,7 +591,7 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 // Templates
 // ---------------------------------------------------------------------------
 
-const indexTSTmpl = `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const indexTSTmpl = `import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 {{- if .HasStdio}}
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 {{- end}}
@@ -543,6 +605,13 @@ import { z } from "zod";
 import { register as register_{{.Name}} } from "./tools/{{.Name}}.js";
 {{- end}}
 import { register as register_search_tools } from "./search.js";
+{{- if .Resources}}
+
+// Import resource handlers
+{{- range .Resources}}
+import { register as register_{{.Name}} } from "./resources/{{.Name}}.js";
+{{- end}}
+{{- end}}
 
 // Create the MCP server for {{.ToolkitName}}
 const server = new McpServer({
@@ -550,11 +619,22 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-// Register all tools
+// Register all tools — each register() call invokes server.tool() internally
 {{- range .Tools}}
 register_{{.Name}}(server);
 {{- end}}
 register_search_tools(server);
+{{- if .Resources}}
+
+// Register all resources
+{{- range .Resources}}
+server.resource(
+  "{{.Name | esc}}",
+  new ResourceTemplate("{{.URI | esc}}", { list: undefined }),
+  register_{{.Name}},
+);
+{{- end}}
+{{- end}}
 
 // Start the server with the configured transport
 async function main() {
@@ -694,6 +774,36 @@ export function register(server: McpServer): void {
 }
 
 export default handle_{{.ToolName}};
+`
+
+const tsResourceTmpl = `import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFile = promisify(execFileCb);
+
+// Resource: {{.Name}}
+// Description: {{.Description}}
+// URI template: {{.URI}}
+
+/**
+ * Handler for the {{.Name}} resource.
+ * Executes {{.Entrypoint}} with URI parameters as arguments.
+ */
+export async function register(
+  uri: URL,
+  { {{joinStrings .URIParams ", "}} }: { {{- range $i, $p := .URIParams}}{{if $i}}, {{end}}{{$p}}: string{{end}} },
+): Promise<{ contents: Array<{ uri: string; mimeType: string; text: string }> }> {
+  const { stdout } = await execFile("{{.Entrypoint | esc}}", [{{- range $i, $p := .URIParams}}{{if $i}}, {{end}}{{$p}}{{end}}]);
+  return {
+    contents: [
+      {
+        uri: uri.href,
+        mimeType: "{{.MimeType | esc}}",
+        text: stdout,
+      },
+    ],
+  };
+}
 `
 
 const searchTSTmpl = `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
