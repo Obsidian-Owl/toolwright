@@ -161,11 +161,13 @@ func (o *Output) UnmarshalYAML(value *yaml.Node) error {
 func (o Output) MarshalYAML() (interface{}, error) {
 	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 
-	// format (always present)
-	node.Content = append(node.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "format"},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: o.Format},
-	)
+	// format (omit when empty for backward compat with zero-value Output)
+	if o.Format != "" {
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "format"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: o.Format},
+		)
+	}
 
 	// schema (omit when nil)
 	if o.Schema != nil {

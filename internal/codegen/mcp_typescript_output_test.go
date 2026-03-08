@@ -661,7 +661,8 @@ func TestTSMCP_BuildTSToolData_BinaryTool_IsBinaryOutputTrue(t *testing.T) {
 		Entrypoint:  "./screenshot.sh",
 		Output:      manifest.Output{Format: "binary", MimeType: "image/png"},
 	}
-	data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	require.NoError(t, err)
 
 	assert.True(t, data.IsBinaryOutput,
 		"buildTSToolData must set IsBinaryOutput=true for output format 'binary'")
@@ -675,7 +676,8 @@ func TestTSMCP_BuildTSToolData_BinaryTool_MimeTypePopulated(t *testing.T) {
 		Entrypoint:  "./screenshot.sh",
 		Output:      manifest.Output{Format: "binary", MimeType: "image/png"},
 	}
-	data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	require.NoError(t, err)
 
 	assert.Equal(t, "image/png", data.MimeType,
 		"buildTSToolData must set MimeType from Output.MimeType")
@@ -692,7 +694,8 @@ func TestTSMCP_BuildTSToolData_NonBinary_IsBinaryOutputFalse(t *testing.T) {
 				Entrypoint:  "./tool.sh",
 				Output:      manifest.Output{Format: format},
 			}
-			data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+			data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+			require.NoError(t, err)
 
 			assert.False(t, data.IsBinaryOutput,
 				"buildTSToolData must set IsBinaryOutput=false for format %q", format)
@@ -708,7 +711,8 @@ func TestTSMCP_BuildTSToolData_NonBinary_MimeTypeEmpty(t *testing.T) {
 		Entrypoint:  "./query.sh",
 		Output:      manifest.Output{Format: "json"},
 	}
-	data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	require.NoError(t, err)
 
 	assert.Empty(t, data.MimeType,
 		"buildTSToolData must set MimeType to empty for non-binary tools")
@@ -730,7 +734,8 @@ func TestTSMCP_BuildTSToolData_InlineSchema_HasOutputSchemaTrue(t *testing.T) {
 			},
 		},
 	}
-	data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	require.NoError(t, err)
 
 	assert.True(t, data.HasOutputSchema,
 		"buildTSToolData must set HasOutputSchema=true for inline map schema")
@@ -753,7 +758,8 @@ func TestTSMCP_BuildTSToolData_InlineSchema_OutputSchemaContainsJSON(t *testing.
 			},
 		},
 	}
-	data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	require.NoError(t, err)
 
 	require.NotEmpty(t, data.OutputSchema,
 		"buildTSToolData must populate OutputSchema for inline map schema")
@@ -778,7 +784,8 @@ func TestTSMCP_BuildTSToolData_StringSchema_HasOutputSchemaFalse(t *testing.T) {
 			Schema: "schemas/output.json",
 		},
 	}
-	data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	require.NoError(t, err)
 
 	assert.False(t, data.HasOutputSchema,
 		"buildTSToolData must set HasOutputSchema=false for string schema (file path)")
@@ -792,7 +799,8 @@ func TestTSMCP_BuildTSToolData_NilSchema_HasOutputSchemaFalse(t *testing.T) {
 		Entrypoint:  "./greet.sh",
 		Output:      manifest.Output{Format: "text"},
 	}
-	data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+	require.NoError(t, err)
 
 	assert.False(t, data.HasOutputSchema,
 		"buildTSToolData must set HasOutputSchema=false for nil schema")
@@ -1089,7 +1097,8 @@ func TestTSMCP_BuildTSToolData_IsBinaryOutput_AllFormats(t *testing.T) {
 					MimeType: "image/png", // set mimeType even for non-binary to verify IsBinaryOutput is format-driven
 				},
 			}
-			data := buildTSToolData(tool, manifest.Auth{Type: "none"})
+			data, err := buildTSToolData(tool, manifest.Auth{Type: "none"})
+			require.NoError(t, err)
 
 			if tc.wantIsBinary {
 				assert.True(t, data.IsBinaryOutput,

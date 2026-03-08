@@ -845,8 +845,9 @@ var {{.GoName}}Cmd = &cobra.Command{
 			return fmt.Errorf("binary output requires --output <file> or pipe")
 		}
 		c := exec.CommandContext(cmd.Context(), "echo", "running", "{{$toolName}}")
-		if isTTY {
-			// TTY with --output: capture stdout and write to file.
+		c.Stderr = os.Stderr
+		if {{$goName}}FlagOutput != "" {
+			// --output provided: capture stdout and write to file.
 			out, err := c.Output()
 			if err != nil {
 				return fmt.Errorf("{{$toolName}} failed: %w", err)
@@ -855,9 +856,8 @@ var {{.GoName}}Cmd = &cobra.Command{
 				return fmt.Errorf("writing output file: %w", err)
 			}
 		} else {
-			// Piped: write directly to stdout.
+			// No --output: stream directly to stdout (pipe mode).
 			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
 			if err := c.Run(); err != nil {
 				return fmt.Errorf("{{$toolName}} failed: %w", err)
 			}

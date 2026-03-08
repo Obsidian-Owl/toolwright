@@ -52,7 +52,10 @@ func (g *TSMCPGenerator) Generate(ctx context.Context, data TemplateData, _ stri
 			return nil, fmt.Errorf("tool name %q contains invalid characters: must match %s", tool.Name, validToolName.String())
 		}
 		auth := m.ResolvedAuth(tool)
-		toolData := buildTSToolData(tool, auth)
+		toolData, buildErr := buildTSToolData(tool, auth)
+		if buildErr != nil {
+			return nil, buildErr
+		}
 		var toolFile []byte
 		toolFile, err = renderTSTemplate("tool.ts", tsToolTmpl, toolData)
 		if err != nil {
@@ -166,6 +169,7 @@ type tsToolData struct {
 	OutputSchema    string // JSON string of the schema object
 	SchemaPath      string // set when Schema is a file-path string
 	IsBinaryOutput  bool
+	IsImageMime     bool // true when MimeType starts with "image/"
 	MimeType        string
 }
 
@@ -370,7 +374,7 @@ func buildIndexData(m manifest.Toolkit, hasStdio, hasStreamableHTTP bool) indexD
 }
 
 // buildTSToolData constructs tsToolData for a single tool.
-func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
+func buildTSToolData(tool manifest.Tool, auth manifest.Auth) (tsToolData, error) {
 	args := make([]tsArgData, len(tool.Args))
 	for i, a := range tool.Args {
 		args[i] = tsArgData{
@@ -426,10 +430,11 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
 	var schemaPath string
 	if schemaMap, ok := tool.Output.Schema.(map[string]any); ok {
 		jsonBytes, err := json.Marshal(schemaMap)
-		if err == nil {
-			hasOutputSchema = true
-			outputSchemaJSON = string(jsonBytes)
+		if err != nil {
+			return tsToolData{}, fmt.Errorf("marshaling output schema for tool %q: %w", tool.Name, err)
 		}
+		hasOutputSchema = true
+		outputSchemaJSON = string(jsonBytes)
 	} else if s, ok := tool.Output.Schema.(string); ok {
 		schemaPath = s
 	}
@@ -437,8 +442,10 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
 	// Binary output
 	isBinaryOutput := tool.Output.Format == "binary"
 	mimeType := ""
+	isImageMime := false
 	if isBinaryOutput {
 		mimeType = tool.Output.MimeType
+		isImageMime = strings.HasPrefix(mimeType, "image/")
 	}
 
 	return tsToolData{
@@ -456,8 +463,9 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
 		OutputSchema:    outputSchemaJSON,
 		SchemaPath:      schemaPath,
 		IsBinaryOutput:  isBinaryOutput,
+		IsImageMime:     isImageMime,
 		MimeType:        mimeType,
-	}
+	}, nil
 }
 
 // buildSearchData constructs searchData for the search.ts template.
@@ -597,7 +605,7 @@ type {{.ToolName}}Input = z.infer<typeof inputSchema>;
  * {{.Description}}
  */
 {{- if .IsBinaryOutput}}
-async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ content: Array<{ type: string; data: string; mimeType: string }> }> {
+async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ content: Array<Record<string, unknown>> }> {
 {{- else}}
 async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ content: Array<{ type: string; text: string }> }> {
 {{- end}}
@@ -617,13 +625,26 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
   // TODO: implement {{.ToolName}} logic
 {{- if .IsBinaryOutput}}
   const stdout = ""; // TODO: replace with actual binary output
+  const base64Data = Buffer.from(stdout).toString("base64");
+{{- if .IsImageMime}}
   return {
     content: [{
       type: "image",
-      data: Buffer.from(stdout).toString("base64"),
+      data: base64Data,
       mimeType: "{{.MimeType | esc}}",
     }],
   };
+{{- else}}
+  return {
+    content: [{
+      type: "resource",
+      resource: {
+        uri: "data:{{.MimeType | esc}};base64," + base64Data,
+        mimeType: "{{.MimeType | esc}}",
+      },
+    }],
+  };
+{{- end}}
 {{- else}}
   return {
     content: [{ type: "text", text: "{{.ToolName | esc}} executed" }],

@@ -599,7 +599,17 @@ func validateOutput(output Output, prefix string) []ValidationError {
 	case nil:
 		// Accepted: no schema.
 	case string:
-		// Accepted: file path, validated at runtime.
+		// File path reference; the generated code includes it as a comment.
+		// Codegen does not resolve the path — it is the user's responsibility
+		// to ensure the file exists at build time.
+		if s == "" {
+			errs = append(errs, ValidationError{
+				Path:     prefix + ".schema",
+				Message:  "output schema path must not be empty",
+				Rule:     "invalid-output-schema",
+				Severity: SeverityError,
+			})
+		}
 	case map[string]any:
 		// Validate type values recursively.
 		if err := checkItemSchemaTypeValues(s); err != nil {
@@ -650,7 +660,7 @@ func validateOutput(output Output, prefix string) []ValidationError {
 				Severity: SeverityError,
 			})
 		}
-	} else if output.MimeType != "" {
+	} else if strings.TrimSpace(output.MimeType) != "" {
 		errs = append(errs, ValidationError{
 			Path:     prefix + ".mimeType",
 			Message:  fmt.Sprintf("mimeType is only applicable to binary format, got format %q", output.Format),
