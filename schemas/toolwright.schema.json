@@ -142,6 +142,20 @@
     "auth": {
       "$ref": "#/$defs/auth"
     },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["uri", "name", "entrypoint"],
+        "properties": {
+          "uri": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "mimeType": { "type": "string" },
+          "entrypoint": { "type": "string" }
+        }
+      }
+    },
     "generate": {
       "type": "object",
       "properties": {
