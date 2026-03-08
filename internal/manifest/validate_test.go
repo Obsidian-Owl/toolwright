@@ -2370,3 +2370,220 @@ func TestValidateFlag_ItemSchema_BothInvalidAndNotAllowed_OnlyNotAllowed(t *test
 	assert.Nil(t, ve2,
 		"When item-schema-not-allowed fires, invalid-item-schema should not also fire")
 }
+
+// ---------------------------------------------------------------------------
+// Security boundary tests: property names, flag/arg names, depth limit
+// ---------------------------------------------------------------------------
+
+func TestValidateFlag_ItemSchema_InvalidPropertyName_Rejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		propName string
+	}{
+		{"injection via closing brace", `}); process.exit(1); //`},
+		{"injection via quote", `": z.string(), }); import("child_process"); const x = { "`},
+		{"starts with digit", "123bad"},
+		{"contains space", "foo bar"},
+		{"contains hyphen", "foo-bar"},
+		{"contains dot", "foo.bar"},
+		{"empty string", ""},
+		{"contains semicolon", "foo;bar"},
+		{"contains newline", "foo\nbar"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{{
+				Name:        "my-tool",
+				Description: "A tool",
+				Entrypoint:  "./tool.sh",
+				Flags: []Flag{{
+					Name:        "data",
+					Type:        "object",
+					Description: "Object flag",
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							tt.propName: map[string]any{"type": "string"},
+						},
+					},
+				}},
+			}}
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "invalid-property-name")
+			require.NotNil(t, ve,
+				"Property name %q should be rejected as invalid-property-name, got rules: %v",
+				tt.propName, errRules(errs))
+			assert.Equal(t, SeverityError, ve.Severity)
+		})
+	}
+}
+
+func TestValidateFlag_ItemSchema_ValidPropertyName_Accepted(t *testing.T) {
+	validNames := []string{"name", "firstName", "_private", "$ref", "x1", "A", "camelCase"}
+	for _, name := range validNames {
+		t.Run(name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{{
+				Name:        "my-tool",
+				Description: "A tool",
+				Entrypoint:  "./tool.sh",
+				Flags: []Flag{{
+					Name:        "data",
+					Type:        "object",
+					Description: "Object flag",
+					ItemSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							name: map[string]any{"type": "string"},
+						},
+					},
+				}},
+			}}
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "invalid-property-name")
+			assert.Nil(t, ve,
+				"Property name %q should be accepted, but got invalid-property-name", name)
+		})
+	}
+}
+
+func TestValidateFlag_ItemSchema_NestedInvalidPropertyName_Rejected(t *testing.T) {
+	tk := validToolkit()
+	tk.Tools = []Tool{{
+		Name:        "my-tool",
+		Description: "A tool",
+		Entrypoint:  "./tool.sh",
+		Flags: []Flag{{
+			Name:        "data",
+			Type:        "object",
+			Description: "Object flag",
+			ItemSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"safe": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"bad name": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		}},
+	}}
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "invalid-property-name")
+	require.NotNil(t, ve,
+		"Nested invalid property name should be rejected")
+}
+
+func TestValidateTool_FlagName_InvalidFormat_Rejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagName string
+	}{
+		{"starts with digit", "1bad"},
+		{"contains space", "foo bar"},
+		{"injection via quote", `foo"; os.Exit(1); //`},
+		{"empty string", ""},
+		{"starts with hyphen", "-flag"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{{
+				Name:        "my-tool",
+				Description: "A tool",
+				Entrypoint:  "./tool.sh",
+				Flags: []Flag{{
+					Name:        tt.flagName,
+					Type:        "string",
+					Description: "A flag",
+				}},
+			}}
+			errs := Validate(tk)
+			ve := findError(errs, "tools[0].flags[0].name", "name-format")
+			require.NotNil(t, ve,
+				"Flag name %q should be rejected with name-format, got rules: %v",
+				tt.flagName, errRules(errs))
+			assert.Equal(t, SeverityError, ve.Severity)
+		})
+	}
+}
+
+func TestValidateTool_ArgName_InvalidFormat_Rejected(t *testing.T) {
+	tk := validToolkit()
+	tk.Tools = []Tool{{
+		Name:        "my-tool",
+		Description: "A tool",
+		Entrypoint:  "./tool.sh",
+		Args: []Arg{{
+			Name:        "123bad",
+			Type:        "string",
+			Description: "An arg",
+		}},
+	}}
+	errs := Validate(tk)
+	ve := findError(errs, "tools[0].args[0].name", "name-format")
+	require.NotNil(t, ve,
+		"Arg name %q should be rejected with name-format", "123bad")
+}
+
+func TestValidateTool_FlagName_ValidFormat_Accepted(t *testing.T) {
+	validNames := []string{"verbose", "dry-run", "output_format", "V", "x1"}
+	for _, name := range validNames {
+		t.Run(name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{{
+				Name:        "my-tool",
+				Description: "A tool",
+				Entrypoint:  "./tool.sh",
+				Flags: []Flag{{
+					Name:        name,
+					Type:        "string",
+					Description: "A flag",
+				}},
+			}}
+			errs := Validate(tk)
+			ve := findError(errs, "tools[0].flags[0].name", "name-format")
+			assert.Nil(t, ve,
+				"Flag name %q should be accepted, but got name-format error", name)
+		})
+	}
+}
+
+func TestValidateFlag_ItemSchema_ExceedsMaxDepth_Rejected(t *testing.T) {
+	// Build a schema nested beyond maxItemSchemaDepth.
+	schema := map[string]any{"type": "string"}
+	for i := 0; i < maxItemSchemaDepth+5; i++ {
+		schema = map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"nested": schema,
+			},
+		}
+	}
+	tk := validToolkit()
+	tk.Tools = []Tool{{
+		Name:        "my-tool",
+		Description: "A tool",
+		Entrypoint:  "./tool.sh",
+		Flags: []Flag{{
+			Name:        "data",
+			Type:        "object",
+			Description: "Deep object",
+			ItemSchema:  schema,
+		}},
+	}}
+	errs := Validate(tk)
+	// Should hit either invalid-property-name (depth limit) or invalid-item-schema (depth limit).
+	hasDepthError := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "maximum nesting depth") {
+			hasDepthError = true
+			break
+		}
+	}
+	assert.True(t, hasDepthError,
+		"Schema exceeding maxItemSchemaDepth should produce a depth error, got: %v", errRules(errs))
+}
