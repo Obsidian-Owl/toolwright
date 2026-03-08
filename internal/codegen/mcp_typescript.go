@@ -143,14 +143,24 @@ type tsFlagData struct {
 	Description string
 }
 
+type tsAnnotations struct {
+	ReadOnly    *bool
+	Destructive *bool
+	Idempotent  *bool
+	OpenWorld   *bool
+}
+
 type tsToolData struct {
-	ToolName    string
-	Description string
-	Args        []tsArgData
-	Flags       []tsFlagData
-	HasAuth     bool
-	AuthType    string
-	TokenEnv    string
+	ToolName       string
+	Description    string
+	Args           []tsArgData
+	Flags          []tsFlagData
+	HasAuth        bool
+	AuthType       string
+	TokenEnv       string
+	HasAnnotations bool
+	Annotations    tsAnnotations
+	Title          string
 }
 
 type indexData struct {
@@ -387,14 +397,34 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
 		}
 	}
 	hasAuth := auth.Type == "token" || auth.Type == "oauth2"
+
+	var annot tsAnnotations
+	var title string
+	hasAnnotations := false
+	if tool.Annotations != nil {
+		annot = tsAnnotations{
+			ReadOnly:    tool.Annotations.ReadOnly,
+			Destructive: tool.Annotations.Destructive,
+			Idempotent:  tool.Annotations.Idempotent,
+			OpenWorld:   tool.Annotations.OpenWorld,
+		}
+		title = tool.Annotations.Title
+		hasAnnotations = annot.ReadOnly != nil || annot.Destructive != nil ||
+			annot.Idempotent != nil || annot.OpenWorld != nil ||
+			title != ""
+	}
+
 	return tsToolData{
-		ToolName:    tool.Name,
-		Description: tool.Description,
-		Args:        args,
-		Flags:       flags,
-		HasAuth:     hasAuth,
-		AuthType:    auth.Type,
-		TokenEnv:    auth.TokenEnv,
+		ToolName:       tool.Name,
+		Description:    tool.Description,
+		Args:           args,
+		Flags:          flags,
+		HasAuth:        hasAuth,
+		AuthType:       auth.Type,
+		TokenEnv:       auth.TokenEnv,
+		HasAnnotations: hasAnnotations,
+		Annotations:    annot,
+		Title:          title,
 	}
 }
 
@@ -433,6 +463,15 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"tsType":      tsType,
 		"esc":         escStringLiteral,
 		"joinEsc":     joinEscStringLiterals,
+		"derefBool": func(b *bool) string {
+			if b == nil {
+				return ""
+			}
+			if *b {
+				return "true"
+			}
+			return "false"
+		},
 	}
 	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
 	if err != nil {
@@ -549,6 +588,29 @@ export function register(server: McpServer): void {
     "{{.ToolName | esc}}",
     "{{.Description | esc}}",
     inputSchema.shape,
+{{- if .HasAnnotations}}
+    {
+{{- if or .Annotations.ReadOnly .Annotations.Destructive .Annotations.Idempotent .Annotations.OpenWorld}}
+      annotations: {
+{{- if .Annotations.ReadOnly}}
+        readOnlyHint: {{derefBool .Annotations.ReadOnly}},
+{{- end}}
+{{- if .Annotations.Destructive}}
+        destructiveHint: {{derefBool .Annotations.Destructive}},
+{{- end}}
+{{- if .Annotations.Idempotent}}
+        idempotentHint: {{derefBool .Annotations.Idempotent}},
+{{- end}}
+{{- if .Annotations.OpenWorld}}
+        openWorldHint: {{derefBool .Annotations.OpenWorld}},
+{{- end}}
+      },
+{{- end}}
+{{- if .Title}}
+      title: "{{.Title | esc}}",
+{{- end}}
+    },
+{{- end}}
     async (input: {{.ToolName}}Input) => {
       return handle_{{.ToolName}}(input);
     },
