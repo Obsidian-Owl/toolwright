@@ -1226,6 +1226,237 @@ func TestTSMCP_ToolFileContainsFlagDescriptions(t *testing.T) {
 		"search_docs.ts must include flag description for 'limit'")
 }
 
+// ---------------------------------------------------------------------------
+// AC-11 (array): Zod array schemas for array flag types
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_AC11_ArrayFlagZodSchema(t *testing.T) {
+	tests := []struct {
+		name         string
+		manifestType string
+		wantZodExpr  string // expected fragment in generated code
+	}{
+		{
+			name:         "string[] maps to z.array(z.string())",
+			manifestType: "string[]",
+			wantZodExpr:  "z.array(z.string())",
+		},
+		{
+			name:         "int[] maps to z.array(z.number())",
+			manifestType: "int[]",
+			wantZodExpr:  "z.array(z.number())",
+		},
+		{
+			name:         "float[] maps to z.array(z.number())",
+			manifestType: "float[]",
+			wantZodExpr:  "z.array(z.number())",
+		},
+		{
+			name:         "bool[] maps to z.array(z.boolean())",
+			manifestType: "bool[]",
+			wantZodExpr:  "z.array(z.boolean())",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name:    "array-zod-server",
+					Version: "1.0.0",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:       "array_test",
+						Entrypoint: "./test.sh",
+						Auth:       &manifest.Auth{Type: "none"},
+						Flags: []manifest.Flag{
+							{
+								Name:        "items",
+								Type:        tc.manifestType,
+								Required:    true,
+								Description: "test array flag",
+							},
+						},
+					},
+				},
+				Generate: manifest.Generate{
+					MCP: manifest.MCPConfig{
+						Target:    "typescript",
+						Transport: []string{"stdio"},
+					},
+				},
+			}
+
+			files := generateTSMCP(t, m)
+			content := fileContent(t, files, "src/tools/array_test.ts")
+			assert.Contains(t, content, tc.wantZodExpr,
+				"manifest type %q must produce Zod schema %q in generated code",
+				tc.manifestType, tc.wantZodExpr)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-12: Required vs optional array flags
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_AC12_RequiredArrayFlag_NoOptional(t *testing.T) {
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "req-array-server",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "req_array_tool",
+				Entrypoint: "./test.sh",
+				Auth:       &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "tags",
+						Type:        "string[]",
+						Required:    true,
+						Description: "required array flag",
+					},
+				},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/req_array_tool.ts")
+	assert.Contains(t, content, "z.array(z.string())",
+		"required string[] flag must emit z.array(z.string())")
+	// Required flag must NOT have .optional() appended to the array schema
+	assert.NotContains(t, content, "z.array(z.string()).optional()",
+		"required string[] flag must not emit .optional()")
+}
+
+func TestTSMCP_AC12_OptionalArrayFlag_HasOptional(t *testing.T) {
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "opt-array-server",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "opt_array_tool",
+				Entrypoint: "./test.sh",
+				Auth:       &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{
+						Name:        "tags",
+						Type:        "string[]",
+						Required:    false,
+						Description: "optional array flag",
+					},
+				},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/opt_array_tool.ts")
+	assert.Contains(t, content, "z.array(z.string()).optional()",
+		"optional string[] flag must emit z.array(z.string()).optional()")
+}
+
+func TestTSMCP_AC12_ArrayFlagRequiredOptionalVariants(t *testing.T) {
+	tests := []struct {
+		name         string
+		manifestType string
+		required     bool
+		wantContains string
+		wantAbsent   string
+	}{
+		{
+			name:         "required int[] has no optional",
+			manifestType: "int[]",
+			required:     true,
+			wantContains: "z.array(z.number())",
+			wantAbsent:   "z.array(z.number()).optional()",
+		},
+		{
+			name:         "optional int[] has optional",
+			manifestType: "int[]",
+			required:     false,
+			wantContains: "z.array(z.number()).optional()",
+			wantAbsent:   "",
+		},
+		{
+			name:         "optional bool[] has optional",
+			manifestType: "bool[]",
+			required:     false,
+			wantContains: "z.array(z.boolean()).optional()",
+			wantAbsent:   "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name:    "array-req-server",
+					Version: "1.0.0",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:       "array_req_test",
+						Entrypoint: "./test.sh",
+						Auth:       &manifest.Auth{Type: "none"},
+						Flags: []manifest.Flag{
+							{
+								Name:        "items",
+								Type:        tc.manifestType,
+								Required:    tc.required,
+								Description: "test flag",
+							},
+						},
+					},
+				},
+				Generate: manifest.Generate{
+					MCP: manifest.MCPConfig{
+						Target:    "typescript",
+						Transport: []string{"stdio"},
+					},
+				},
+			}
+
+			files := generateTSMCP(t, m)
+			content := fileContent(t, files, "src/tools/array_req_test.ts")
+			assert.Contains(t, content, tc.wantContains,
+				"manifest type %q required=%v must produce %q",
+				tc.manifestType, tc.required, tc.wantContains)
+			if tc.wantAbsent != "" {
+				assert.NotContains(t, content, tc.wantAbsent,
+					"manifest type %q required=%v must NOT produce %q",
+					tc.manifestType, tc.required, tc.wantAbsent)
+			}
+		})
+	}
+}
+
 func TestTSMCP_EmptyToolsSlice(t *testing.T) {
 	// Boundary case: manifest with zero tools should still produce structural
 	// files (index.ts, search.ts, package.json, tsconfig.json, README) without panic.

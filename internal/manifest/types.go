@@ -193,3 +193,23 @@ func ParseFile(path string) (*Toolkit, error) {
 	}
 	return tk, nil
 }
+
+// validArrayTypes maps valid array type strings to their scalar base.
+var validArrayTypes = map[string]string{
+	"string[]": "string",
+	"int[]":    "int",
+	"float[]":  "float",
+	"bool[]":   "bool",
+}
+
+// IsArrayType reports whether flagType is a valid array type (e.g., "string[]").
+func IsArrayType(flagType string) bool {
+	_, ok := validArrayTypes[flagType]
+	return ok
+}
+
+// BaseType returns the scalar base of an array type (e.g., "string[]" → "string").
+// Returns "" for non-array types.
+func BaseType(flagType string) string {
+	return validArrayTypes[flagType]
+}

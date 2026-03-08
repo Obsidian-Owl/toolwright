@@ -1247,6 +1247,208 @@ func TestValidationError_FieldsAccessible(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Task 2: Unknown flag types are rejected (rule: "unknown-flag-type")
+// ---------------------------------------------------------------------------
+
+func TestValidateFlag_UnknownFlagType(t *testing.T) {
+	tests := []struct {
+		name      string
+		flagType  string
+		wantError bool
+	}{
+		// Known scalar types
+		{name: "string is known", flagType: "string", wantError: false},
+		{name: "int is known", flagType: "int", wantError: false},
+		{name: "float is known", flagType: "float", wantError: false},
+		{name: "bool is known", flagType: "bool", wantError: false},
+		// Known array types
+		{name: "string[] is known", flagType: "string[]", wantError: false},
+		{name: "int[] is known", flagType: "int[]", wantError: false},
+		{name: "float[] is known", flagType: "float[]", wantError: false},
+		{name: "bool[] is known", flagType: "bool[]", wantError: false},
+		// Unknown types
+		{name: "unknown scalar", flagType: "bytes", wantError: true},
+		{name: "unknown array", flagType: "bytes[]", wantError: true},
+		{name: "empty string", flagType: "", wantError: true},
+		{name: "number is not a type", flagType: "number", wantError: true},
+		{name: "array is not a type", flagType: "array", wantError: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{Name: "myflag", Type: tc.flagType, Description: "A flag"},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+
+			if tc.wantError {
+				ve := findErrorByRule(errs, "unknown-flag-type")
+				require.NotNil(t, ve,
+					"Flag type %q should produce unknown-flag-type error, got rules: %v",
+					tc.flagType, errRules(errs))
+				assert.Contains(t, ve.Path, "tools[0].flags[0]",
+					"Error path should reference the flag")
+			} else {
+				ve := findErrorByRule(errs, "unknown-flag-type")
+				assert.Nil(t, ve,
+					"Flag type %q should be valid, got error: %v", tc.flagType, ve)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 2: Array default type checking
+// ---------------------------------------------------------------------------
+
+func TestCheckDefaultType_ArrayTypes(t *testing.T) {
+	tests := []struct {
+		name      string
+		flagType  string
+		value     any
+		wantError bool
+	}{
+		// string[] valid cases
+		{name: "string[] with string slice", flagType: "string[]", value: []interface{}{"a", "b"}, wantError: false},
+		{name: "string[] with empty slice", flagType: "string[]", value: []interface{}{}, wantError: false},
+		// string[] invalid cases
+		{name: "string[] with scalar string", flagType: "string[]", value: "scalar", wantError: true},
+		{name: "string[] with int element", flagType: "string[]", value: []interface{}{1, 2}, wantError: true},
+
+		// int[] valid cases
+		{name: "int[] with int slice", flagType: "int[]", value: []interface{}{1, 2, 3}, wantError: false},
+		{name: "int[] with empty slice", flagType: "int[]", value: []interface{}{}, wantError: false},
+		// int[] invalid cases
+		{name: "int[] with string element", flagType: "int[]", value: []interface{}{"a"}, wantError: true},
+		{name: "int[] with scalar", flagType: "int[]", value: 42, wantError: true},
+
+		// float[] valid cases
+		{name: "float[] with float slice", flagType: "float[]", value: []interface{}{1.1, 2.2}, wantError: false},
+		{name: "float[] with int elements (acceptable)", flagType: "float[]", value: []interface{}{1, 2}, wantError: false},
+		{name: "float[] with empty slice", flagType: "float[]", value: []interface{}{}, wantError: false},
+		// float[] invalid cases
+		{name: "float[] with string element", flagType: "float[]", value: []interface{}{"abc"}, wantError: true},
+
+		// bool[] valid cases
+		{name: "bool[] with bool slice", flagType: "bool[]", value: []interface{}{true, false}, wantError: false},
+		{name: "bool[] with empty slice", flagType: "bool[]", value: []interface{}{}, wantError: false},
+		// bool[] invalid cases
+		{name: "bool[] with string element", flagType: "bool[]", value: []interface{}{"yes"}, wantError: true},
+		{name: "bool[] with scalar", flagType: "bool[]", value: true, wantError: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkDefaultType(tc.flagType, tc.value)
+			if tc.wantError {
+				require.Error(t, err,
+					"checkDefaultType(%q, %v) should return an error", tc.flagType, tc.value)
+			} else {
+				require.NoError(t, err,
+					"checkDefaultType(%q, %v) should not return an error", tc.flagType, tc.value)
+			}
+		})
+	}
+}
+
+func TestValidate_ArrayFlagDefault_Integration(t *testing.T) {
+	// Verify array default type errors surface as ValidationErrors via Validate.
+	tests := []struct {
+		name      string
+		flagType  string
+		dflt      any
+		wantError bool
+	}{
+		{name: "string[] valid default", flagType: "string[]", dflt: []interface{}{"a", "b"}, wantError: false},
+		{name: "string[] scalar default is invalid", flagType: "string[]", dflt: "scalar", wantError: true},
+		{name: "int[] with string element", flagType: "int[]", dflt: []interface{}{"not-an-int"}, wantError: true},
+		{name: "int[] empty slice is valid", flagType: "int[]", dflt: []interface{}{}, wantError: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := validToolkit()
+			tk.Tools = []Tool{
+				{
+					Name:        "my-tool",
+					Description: "A tool",
+					Entrypoint:  "./tool.sh",
+					Flags: []Flag{
+						{Name: "myflag", Type: tc.flagType, Default: tc.dflt, Description: "A flag"},
+					},
+				},
+			}
+
+			errs := Validate(tk)
+			flagPath := "tools[0].flags[0].default"
+
+			if tc.wantError {
+				ve := findErrorByPath(errs, flagPath)
+				require.NotNil(t, ve,
+					"Expected error at %s for type %q with default %v, got: %v",
+					flagPath, tc.flagType, tc.dflt, errPaths(errs))
+				assert.Equal(t, "type-mismatch", ve.Rule)
+			} else {
+				ve := findError(errs, flagPath, "type-mismatch")
+				assert.Nil(t, ve,
+					"Expected no type-mismatch at %s for type %q with default %v",
+					flagPath, tc.flagType, tc.dflt)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 2: Array enum type checking
+// ---------------------------------------------------------------------------
+
+func TestCheckEnumType_ArrayTypes(t *testing.T) {
+	tests := []struct {
+		name      string
+		flagType  string
+		enum      []string
+		wantError bool
+	}{
+		// string[] dispatches to string scalar — all string values valid
+		{name: "string[] enum valid", flagType: "string[]", enum: []string{"a", "b"}, wantError: false},
+
+		// int[] dispatches to int scalar — values must be parseable as int
+		{name: "int[] enum valid ints", flagType: "int[]", enum: []string{"1", "2", "3"}, wantError: false},
+		{name: "int[] enum with non-int", flagType: "int[]", enum: []string{"1", "not-int"}, wantError: true},
+
+		// float[] dispatches to float scalar
+		{name: "float[] enum valid floats", flagType: "float[]", enum: []string{"1.1", "2.2"}, wantError: false},
+		{name: "float[] enum with non-float", flagType: "float[]", enum: []string{"1.0", "abc"}, wantError: true},
+
+		// bool[] dispatches to bool scalar
+		{name: "bool[] enum valid bools", flagType: "bool[]", enum: []string{"true", "false"}, wantError: false},
+		{name: "bool[] enum with non-bool", flagType: "bool[]", enum: []string{"yes", "no"}, wantError: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkEnumType(tc.flagType, tc.enum)
+			if tc.wantError {
+				require.Error(t, err,
+					"checkEnumType(%q, %v) should return an error", tc.flagType, tc.enum)
+			} else {
+				require.NoError(t, err,
+					"checkEnumType(%q, %v) should not return an error", tc.flagType, tc.enum)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helper: extract paths/rules from error slices for diagnostic messages
 // ---------------------------------------------------------------------------
 

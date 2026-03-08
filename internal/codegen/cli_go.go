@@ -12,7 +12,17 @@ import (
 )
 
 // validToolName matches tool names safe for use in identifiers and file paths.
+// Security boundary: this regex also prevents injection into generated source
+// code string literals and exec.Command arguments. Do not relax without
+// reviewing all template interpolation points that use tool names.
 var validToolName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+
+// escStringLiteral escapes a string for safe interpolation inside a
+// double-quoted Go or JavaScript/TypeScript string literal.
+func escStringLiteral(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`)
+	return r.Replace(s)
+}
 
 // GoCLIGenerator generates Go CLI projects using Cobra.
 type GoCLIGenerator struct{}
@@ -176,6 +186,8 @@ type flagData struct {
 	Description string
 	Enum        []string
 	HasShort    bool
+	IsArray     bool   // true when the manifest type is an array type (e.g., "string[]")
+	ArrayBase   string // base element type for array flags (e.g., "string", "int")
 }
 
 type argData struct {
@@ -187,17 +199,18 @@ type argData struct {
 }
 
 type toolGoData struct {
-	ToolkitName      string
-	ToolName         string // original name used in string literals (e.g., "check-health")
-	GoName           string // sanitized Go identifier (e.g., "checkHealth")
-	Description      string
-	Args             []argData
-	Flags            []flagData
-	HasAuth          bool
-	AuthType         string
-	TokenEnv         string
-	TokenFlag        string
-	HasNonStringArgs bool // true if any arg needs strconv parsing
+	ToolkitName            string
+	ToolName               string // original name used in string literals (e.g., "check-health")
+	GoName                 string // sanitized Go identifier (e.g., "checkHealth")
+	Description            string
+	Args                   []argData
+	Flags                  []flagData
+	HasAuth                bool
+	AuthType               string
+	TokenEnv               string
+	TokenFlag              string
+	HasNonStringArgs       bool // true if any arg needs strconv parsing
+	HasNonStringArrayFlags bool // true if any flag is a non-string array type needing strconv
 }
 
 type goModData struct {
@@ -246,6 +259,14 @@ func goType(manifestType string) string {
 		return "float64"
 	case "bool":
 		return "bool"
+	case "string[]":
+		return "[]string"
+	case "int[]":
+		return "[]int"
+	case "float[]":
+		return "[]float64"
+	case "bool[]":
+		return "[]bool"
 	default:
 		return "string"
 	}
@@ -286,7 +307,10 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 	}
 
 	flags := make([]flagData, len(tool.Flags))
+	hasNonStringArrayFlags := false
 	for i, f := range tool.Flags {
+		isArr := manifest.IsArrayType(f.Type)
+		base := manifest.BaseType(f.Type)
 		flags[i] = flagData{
 			Name:        f.Name,
 			GoName:      goIdentifier(f.Name),
@@ -295,6 +319,11 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 			Default:     f.Default,
 			Description: f.Description,
 			Enum:        f.Enum,
+			IsArray:     isArr,
+			ArrayBase:   base,
+		}
+		if isArr && base != "string" {
+			hasNonStringArrayFlags = true
 		}
 	}
 
@@ -313,17 +342,18 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 	}
 
 	return toolGoData{
-		ToolkitName:      m.Metadata.Name,
-		ToolName:         tool.Name,
-		GoName:           goIdentifier(tool.Name),
-		Description:      tool.Description,
-		Args:             args,
-		Flags:            flags,
-		HasAuth:          hasAuth,
-		AuthType:         auth.Type,
-		TokenEnv:         auth.TokenEnv,
-		TokenFlag:        tokenFlag,
-		HasNonStringArgs: hasNonStringArgs,
+		ToolkitName:            m.Metadata.Name,
+		ToolName:               tool.Name,
+		GoName:                 goIdentifier(tool.Name),
+		Description:            tool.Description,
+		Args:                   args,
+		Flags:                  flags,
+		HasAuth:                hasAuth,
+		AuthType:               auth.Type,
+		TokenEnv:               auth.TokenEnv,
+		TokenFlag:              tokenFlag,
+		HasNonStringArgs:       hasNonStringArgs,
+		HasNonStringArrayFlags: hasNonStringArrayFlags,
 	}
 }
 
@@ -331,9 +361,21 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 // rendered bytes.
 func renderTemplate(name, tmplStr string, data any) ([]byte, error) {
 	funcMap := template.FuncMap{
-		"cobraFlagFunc": cobraFlagFunc,
-		"formatDefault": formatDefault,
-		"joinStrings":   strings.Join,
+		"cobraFlagFunc":      cobraFlagFunc,
+		"formatDefault":      formatDefault,
+		"formatArrayDefault": formatArrayDefault,
+		"joinStrings":        strings.Join,
+		"esc":                escStringLiteral,
+		"joinEsc": func(elems []string, sep string) string {
+			escaped := make([]string, len(elems))
+			for i, e := range elems {
+				escaped[i] = escStringLiteral(e)
+			}
+			return strings.Join(escaped, sep)
+		},
+		"isStringBase": func(base string) bool {
+			return base == "string"
+		},
 	}
 	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
 	if err != nil {
@@ -356,6 +398,8 @@ func cobraFlagFunc(goTypeName string) string {
 		return "Float64Var"
 	case "bool":
 		return "BoolVar"
+	case "[]string", "[]int", "[]float64", "[]bool":
+		return "StringArrayVar"
 	default:
 		return "StringVar"
 	}
@@ -383,6 +427,31 @@ func formatDefault(v any) string {
 	default:
 		return fmt.Sprintf("%v", val)
 	}
+}
+
+// formatArrayDefault returns the Go literal for an array flag's default.
+// For string[] it emits []string{"a","b"}; for all other array types it
+// emits []string{} because non-string values are parsed from strings at
+// runtime. When v is nil, it returns "nil".
+func formatArrayDefault(v any, isStringBase bool) string {
+	if v == nil {
+		return "nil"
+	}
+	items, ok := v.([]interface{})
+	if !ok {
+		return "nil"
+	}
+	if !isStringBase {
+		return "[]string{}"
+	}
+	if len(items) == 0 {
+		return "[]string{}"
+	}
+	parts := make([]string, len(items))
+	for i, item := range items {
+		parts[i] = fmt.Sprintf("%q", fmt.Sprintf("%v", item))
+	}
+	return "[]string{" + strings.Join(parts, ", ") + "}"
 }
 
 // ---------------------------------------------------------------------------
@@ -423,13 +492,13 @@ type toolInfo struct {
 // registry is the embedded list of tools from the manifest.
 var registry = []toolInfo{
 {{- range .Tools}}
-	{Name: "{{.Name}}", Description: "{{.Description}}"},
+	{Name: "{{.Name}}", Description: "{{.Description | esc}}"},
 {{- end}}
 }
 
 var rootCmd = &cobra.Command{
 	Use:   "{{.ToolkitName}}",
-	Short: "{{.ToolkitDescription}}",
+	Short: "{{.ToolkitDescription | esc}}",
 }
 
 var listJSON bool
@@ -488,7 +557,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-{{- if .HasNonStringArgs}}
+{{- if or .HasNonStringArgs .HasNonStringArrayFlags}}
 	"strconv"
 {{- end}}
 
@@ -504,7 +573,11 @@ import (
 {{- $tokenFlag := .TokenFlag}}
 var (
 {{- range .Flags}}
+{{- if .IsArray}}
+	{{$goName}}Flag{{.GoName}} []string
+{{- else}}
 	{{$goName}}Flag{{.GoName}} {{.GoType}}
+{{- end}}
 {{- end}}
 {{- if $hasAuth}}
 	{{$goName}}Token string
@@ -513,21 +586,25 @@ var (
 
 func init() {
 {{- range .Flags}}
-	{{$goName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description}}{{if .Enum}} (allowed: {{joinStrings .Enum ", "}}){{end}}")
+{{- if .IsArray}}
+	{{$goName}}Cmd.Flags().StringArrayVar(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatArrayDefault .Default (isStringBase .ArrayBase)}}, "{{.Description | esc}}")
+{{- else}}
+	{{$goName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description | esc}}{{if .Enum}} (allowed: {{joinEsc .Enum ", "}}){{end}}")
+{{- end}}
 {{- if .Required}}
 	_ = {{$goName}}Cmd.MarkFlagRequired("{{.Name}}")
 {{- end}}
 {{- end}}
 {{- if $hasAuth}}
-	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv}} env var)")
+	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv | esc}} env var)")
 {{- end}}
 	rootCmd.AddCommand({{$goName}}Cmd)
 }
 
 var {{.GoName}}Cmd = &cobra.Command{
 	Use:   "{{.ToolName}}{{range .Args}} <{{.Name}}>{{end}}",
-	Short: "{{.Description}}",
-	Long:  "{{.Description}}",
+	Short: "{{.Description | esc}}",
+	Long:  "{{.Description | esc}}",
 {{- if .Args}}
 	Args:  cobra.MinimumNArgs({{len .Args}}),
 {{- end}}
@@ -553,14 +630,49 @@ var {{.GoName}}Cmd = &cobra.Command{
 {{- end}}
 		_ = arg{{$a.GoName}}
 {{- end}}
+{{- range .Flags}}
+{{- if .IsArray}}
+{{- if eq .ArrayBase "int"}}
+		parsed{{.GoName}} := make([]int, len({{$goName}}Flag{{.GoName}}))
+		for i, s := range {{$goName}}Flag{{.GoName}} {
+			v, err := strconv.Atoi(s)
+			if err != nil {
+				return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid int", s)
+			}
+			parsed{{.GoName}}[i] = v
+		}
+		_ = parsed{{.GoName}}
+{{- else if eq .ArrayBase "float"}}
+		parsed{{.GoName}} := make([]float64, len({{$goName}}Flag{{.GoName}}))
+		for i, s := range {{$goName}}Flag{{.GoName}} {
+			v, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid float", s)
+			}
+			parsed{{.GoName}}[i] = v
+		}
+		_ = parsed{{.GoName}}
+{{- else if eq .ArrayBase "bool"}}
+		parsed{{.GoName}} := make([]bool, len({{$goName}}Flag{{.GoName}}))
+		for i, s := range {{$goName}}Flag{{.GoName}} {
+			v, err := strconv.ParseBool(s)
+			if err != nil {
+				return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid bool", s)
+			}
+			parsed{{.GoName}}[i] = v
+		}
+		_ = parsed{{.GoName}}
+{{- end}}
+{{- end}}
+{{- end}}
 {{- if $hasAuth}}
 		// Resolve auth token: prefer flag, fall back to env var.
 		token := {{$goName}}Token
 		if token == "" {
-			token = os.Getenv("{{$tokenEnv}}")
+			token = os.Getenv("{{$tokenEnv | esc}}")
 		}
 		if token == "" {
-			return fmt.Errorf("auth required: set {{$tokenEnv}} or pass --{{$tokenFlag}}")
+			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag}}")
 		}
 		_ = token // passed to the entrypoint via environment
 {{- end}}
