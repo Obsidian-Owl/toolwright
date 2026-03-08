@@ -30,15 +30,65 @@ type Metadata struct {
 
 // Tool represents a single tool definition within a toolkit.
 type Tool struct {
-	Name        string         `yaml:"name"`
-	Description string         `yaml:"description"`
-	Entrypoint  string         `yaml:"entrypoint"`
-	Args        []Arg          `yaml:"args,omitempty"`
-	Flags       []Flag         `yaml:"flags,omitempty"`
-	Output      Output         `yaml:"output,omitempty"`
-	Auth        *Auth          `yaml:"auth,omitempty"`
-	Examples    []Example      `yaml:"examples,omitempty"`
-	ExitCodes   map[int]string `yaml:"exit_codes,omitempty"`
+	Name        string           `yaml:"name"`
+	Description string           `yaml:"description"`
+	Entrypoint  string           `yaml:"entrypoint"`
+	Args        []Arg            `yaml:"args,omitempty"`
+	Flags       []Flag           `yaml:"flags,omitempty"`
+	Output      Output           `yaml:"output,omitempty"`
+	Auth        *Auth            `yaml:"auth,omitempty"`
+	Examples    []Example        `yaml:"examples,omitempty"`
+	ExitCodes   map[int]string   `yaml:"exit_codes,omitempty"`
+	Annotations *ToolAnnotations `yaml:"annotations,omitempty"`
+}
+
+// ToolAnnotations holds MCP-spec tool annotations describing tool behaviour.
+type ToolAnnotations struct {
+	ReadOnly    *bool  `yaml:"readOnly,omitempty"`
+	Destructive *bool  `yaml:"destructive,omitempty"`
+	Idempotent  *bool  `yaml:"idempotent,omitempty"`
+	OpenWorld   *bool  `yaml:"openWorld,omitempty"`
+	Title       string `yaml:"title,omitempty"`
+}
+
+// MarshalYAML ensures that *bool fields pointing to false are not dropped by
+// omitempty. go.yaml.in/yaml/v3 omitempty treats a non-nil pointer as
+// non-empty, but we use a custom marshaller as an explicit safety guarantee.
+func (a ToolAnnotations) MarshalYAML() (interface{}, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+
+	addBoolPtr := func(key string, v *bool) {
+		if v == nil {
+			return
+		}
+		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
+		valNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool"}
+		if *v {
+			valNode.Value = "true"
+		} else {
+			valNode.Value = "false"
+		}
+		node.Content = append(node.Content, keyNode, valNode)
+	}
+
+	addBoolPtr("readOnly", a.ReadOnly)
+	addBoolPtr("destructive", a.Destructive)
+	addBoolPtr("idempotent", a.Idempotent)
+	addBoolPtr("openWorld", a.OpenWorld)
+
+	if a.Title != "" {
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "title"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: a.Title},
+		)
+	}
+
+	return node, nil
+}
+
+// BoolPtr returns a pointer to the provided bool value.
+func BoolPtr(b bool) *bool {
+	return &b
 }
 
 // Auth represents authentication configuration. It supports both string
