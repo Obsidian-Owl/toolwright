@@ -432,13 +432,7 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"joinStrings": strings.Join,
 		"tsType":      tsType,
 		"esc":         escStringLiteral,
-		"joinEsc": func(elems []string, sep string) string {
-			escaped := make([]string, len(elems))
-			for i, e := range elems {
-				escaped[i] = escStringLiteral(e)
-			}
-			return strings.Join(escaped, sep)
-		},
+		"joinEsc": joinEscStringLiterals,
 	}
 	t, err := template.New(name).Funcs(funcMap).Parse(tmplStr)
 	if err != nil {
@@ -753,7 +747,7 @@ const metadataTSTmpl = `import { IncomingMessage, ServerResponse } from "node:ht
 // Serves the /.well-known/oauth-protected-resource endpoint
 
 const protectedResourceMetadata = {
-  resource: process.env["RESOURCE_URL"] ?? "{{.ProviderURL}}",
+  resource: process.env["RESOURCE_URL"] ?? "{{.ProviderURL | esc}}",
   authorization_servers: ["{{.ProviderURL | esc}}"],
   scopes_supported: [{{range $i, $s := .Scopes}}{{if $i}}, {{end}}"{{$s | esc}}"{{end}}],
   bearer_methods_supported: ["header"],

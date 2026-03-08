@@ -1292,15 +1292,16 @@ func TestGoCLI_AC9_StringArrayDefaultValues(t *testing.T) {
 		"string[] flag with default [\"a\", \"b\"] must generate []string{\"a\", \"b\"}")
 }
 
-func TestGoCLI_AC9_NonStringArrayDefaultIsEmpty(t *testing.T) {
-	// Non-string array types with a default emit []string{} (parse at runtime).
+func TestGoCLI_AC9_NonStringArrayDefaultPreserved(t *testing.T) {
+	// Non-string array types with a default preserve values as string representations.
 	tests := []struct {
 		manifestType string
 		defaultVal   []interface{}
+		expected     string
 	}{
-		{manifestType: "int[]", defaultVal: []interface{}{1, 2}},
-		{manifestType: "float[]", defaultVal: []interface{}{1.5, 2.5}},
-		{manifestType: "bool[]", defaultVal: []interface{}{true, false}},
+		{manifestType: "int[]", defaultVal: []interface{}{1, 2}, expected: `[]string{"1", "2"}`},
+		{manifestType: "float[]", defaultVal: []interface{}{1.5, 2.5}, expected: `[]string{"1.5", "2.5"}`},
+		{manifestType: "bool[]", defaultVal: []interface{}{true, false}, expected: `[]string{"true", "false"}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.manifestType, func(t *testing.T) {
@@ -1331,8 +1332,8 @@ func TestGoCLI_AC9_NonStringArrayDefaultIsEmpty(t *testing.T) {
 			}
 			files := generateCLI(t, m)
 			content := fileContent(t, files, "internal/commands/nonstr.go")
-			assert.Contains(t, content, "[]string{}",
-				"non-string array type %q with default must generate []string{}", tc.manifestType)
+			assert.Contains(t, content, tc.expected,
+				"non-string array type %q with default must preserve values as strings", tc.manifestType)
 		})
 	}
 }

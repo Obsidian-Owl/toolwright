@@ -24,6 +24,15 @@ func escStringLiteral(s string) string {
 	return r.Replace(s)
 }
 
+// joinEscStringLiterals escapes each element and joins with the separator.
+func joinEscStringLiterals(elems []string, sep string) string {
+	escaped := make([]string, len(elems))
+	for i, e := range elems {
+		escaped[i] = escStringLiteral(e)
+	}
+	return strings.Join(escaped, sep)
+}
+
 // GoCLIGenerator generates Go CLI projects using Cobra.
 type GoCLIGenerator struct{}
 
@@ -409,13 +418,7 @@ func renderTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"formatArrayDefault": formatArrayDefault,
 		"joinStrings":        strings.Join,
 		"esc":                escStringLiteral,
-		"joinEsc": func(elems []string, sep string) string {
-			escaped := make([]string, len(elems))
-			for i, e := range elems {
-				escaped[i] = escStringLiteral(e)
-			}
-			return strings.Join(escaped, sep)
-		},
+		"joinEsc": joinEscStringLiterals,
 		"isStringBase": func(base string) bool {
 			return base == "string"
 		},
@@ -451,6 +454,9 @@ func cobraFlagFunc(goTypeName string) string {
 	case "bool":
 		return "BoolVar"
 	case "[]string", "[]int", "[]float64", "[]bool":
+		// Safety net: array types are handled directly by the template's
+		// .IsArray branch (StringArrayVar). These cases are unreachable
+		// in normal flow but kept as a defensive fallback.
 		return "StringArrayVar"
 	default:
 		return "StringVar"
@@ -523,14 +529,23 @@ func formatArrayDefault(v any, isStringBase bool) string {
 		return "nil"
 	}
 	if !isStringBase {
-		return "[]string{}"
+		// Non-string types are parsed from strings at runtime.
+		// Convert manifest default values to their string representations.
+		if len(items) == 0 {
+			return "[]string{}"
+		}
+		parts := make([]string, len(items))
+		for i, item := range items {
+			parts[i] = fmt.Sprintf("%q", fmt.Sprintf("%v", item))
+		}
+		return "[]string{" + strings.Join(parts, ", ") + "}"
 	}
 	if len(items) == 0 {
 		return "[]string{}"
 	}
 	parts := make([]string, len(items))
 	for i, item := range items {
-		parts[i] = fmt.Sprintf("%q", fmt.Sprintf("%v", item))
+		parts[i] = fmt.Sprintf("%q", item)
 	}
 	return "[]string{" + strings.Join(parts, ", ") + "}"
 }
@@ -671,7 +686,7 @@ var (
 func init() {
 {{- range .Flags}}
 {{- if .IsArray}}
-	{{$goName}}Cmd.Flags().StringArrayVar(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatArrayDefault .Default (isStringBase .ArrayBase)}}, "{{.Description | esc}}")
+	{{$goName}}Cmd.Flags().StringArrayVar(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatArrayDefault .Default (isStringBase .ArrayBase)}}, "{{.Description | esc}}{{if .Enum}} (allowed: {{joinEsc .Enum ", "}}){{end}}")
 {{- else}}
 	{{$goName}}Cmd.Flags().{{cobraFlagFunc .GoType}}(&{{$goName}}Flag{{.GoName}}, "{{.Name}}", {{formatDefault .Default}}, "{{.Description | esc}}{{if .Enum}} (allowed: {{joinEsc .Enum ", "}}){{end}}")
 {{- end}}
