@@ -441,11 +441,11 @@ func TestSchemaAnnotations_RawSchemaContainsAnnotationsDefinition(t *testing.T) 
 
 	expectedBoolFields := []string{"readOnly", "destructive", "idempotent", "openWorld"}
 	for _, field := range expectedBoolFields {
-		fieldDef, ok := annotProps[field].(map[string]any)
-		require.True(t, ok, "annotations.properties must contain %q", field)
+		fieldDef, fieldOK := annotProps[field].(map[string]any)
+		require.True(t, fieldOK, "annotations.properties must contain %q", field)
 
-		fieldType, ok := fieldDef["type"].(string)
-		require.True(t, ok, "annotations.properties.%s must have a 'type' field", field)
+		fieldType, typeOK := fieldDef["type"].(string)
+		require.True(t, typeOK, "annotations.properties.%s must have a 'type' field", field)
 		assert.Equal(t, "boolean", fieldType,
 			"annotations.properties.%s type must be 'boolean', got %q", field, fieldType)
 	}

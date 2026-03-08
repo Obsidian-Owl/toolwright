@@ -465,7 +465,8 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 		"joinEsc":     joinEscStringLiterals,
 		"derefBool": func(b *bool) string {
 			if b == nil {
-				return ""
+				// Unreachable: template {{if}} guards ensure non-nil before calling.
+				return "false"
 			}
 			if *b {
 				return "true"
@@ -592,6 +593,7 @@ export function register(server: McpServer): void {
     {
 {{- if or .Annotations.ReadOnly .Annotations.Destructive .Annotations.Idempotent .Annotations.OpenWorld}}
       annotations: {
+{{- /* Go templates treat non-nil *bool as truthy; derefBool dereferences to the actual value. */}}
 {{- if .Annotations.ReadOnly}}
         readOnlyHint: {{derefBool .Annotations.ReadOnly}},
 {{- end}}

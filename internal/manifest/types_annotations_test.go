@@ -697,9 +697,6 @@ func TestAnnotations_StructHasCorrectFieldTypes(t *testing.T) {
 func TestAnnotations_ToolHasAnnotationsField(t *testing.T) {
 	// Verify Tool struct has an Annotations field of type *ToolAnnotations.
 	tool := Tool{
-		Name:        "test",
-		Description: "test",
-		Entrypoint:  "./test.sh",
 		Annotations: &ToolAnnotations{
 			ReadOnly: BoolPtr(true),
 			Title:    "Test Tool",

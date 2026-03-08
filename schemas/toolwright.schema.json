@@ -121,6 +121,7 @@
           },
           "annotations": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "readOnly": { "type": "boolean" },
               "destructive": { "type": "boolean" },

@@ -51,9 +51,11 @@ type ToolAnnotations struct {
 	Title       string `yaml:"title,omitempty"`
 }
 
-// MarshalYAML ensures that *bool fields pointing to false are not dropped by
-// omitempty. go.yaml.in/yaml/v3 omitempty treats a non-nil pointer as
-// non-empty, but we use a custom marshaller as an explicit safety guarantee.
+// MarshalYAML serialises ToolAnnotations to a YAML mapping node, ensuring
+// that *bool fields set to false are emitted as "false" rather than being
+// silently dropped. Without this custom marshaler, future versions of
+// go.yaml.in/yaml/v3 could change how omitempty handles *bool(false),
+// breaking round-trip fidelity.
 func (a ToolAnnotations) MarshalYAML() (interface{}, error) {
 	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 
