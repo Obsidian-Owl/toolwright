@@ -62,9 +62,58 @@ func Validate(t *Toolkit) []ValidationError {
 
 	errs = append(errs, validateMetadata(t.Metadata)...)
 	errs = append(errs, validateTools(t.Tools)...)
+	errs = append(errs, validateResources(t.Resources)...)
 
 	if t.Auth != nil {
 		errs = append(errs, validateAuth(*t.Auth, "auth")...)
+	}
+
+	return errs
+}
+
+func validateResources(resources []Resource) []ValidationError {
+	var errs []ValidationError
+
+	// Check for duplicate resource names (case-sensitive).
+	seen := make(map[string]bool)
+	for i, r := range resources {
+		if seen[r.Name] {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].name", i),
+				Message:  fmt.Sprintf("resource name %q is not unique", r.Name),
+				Rule:     "unique-resource-name",
+				Severity: SeverityError,
+			})
+		}
+		seen[r.Name] = true
+	}
+
+	// Validate required fields for each resource.
+	for i, r := range resources {
+		if strings.TrimSpace(r.URI) == "" {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].uri", i),
+				Message:  "uri is required",
+				Rule:     "resource-uri-required",
+				Severity: SeverityError,
+			})
+		}
+		if strings.TrimSpace(r.Name) == "" {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].name", i),
+				Message:  "name is required",
+				Rule:     "resource-name-required",
+				Severity: SeverityError,
+			})
+		}
+		if strings.TrimSpace(r.Entrypoint) == "" {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].entrypoint", i),
+				Message:  "entrypoint is required",
+				Rule:     "resource-entrypoint-required",
+				Severity: SeverityError,
+			})
+		}
 	}
 
 	return errs
