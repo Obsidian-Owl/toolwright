@@ -92,7 +92,13 @@
             "type": "object",
             "properties": {
               "format": { "type": "string" },
-              "schema": { "type": "string" }
+              "schema": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "object" }
+                ]
+              },
+              "mimeType": { "type": "string" }
             }
           },
           "auth": {
