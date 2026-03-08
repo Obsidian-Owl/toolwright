@@ -227,6 +227,7 @@ type toolGoData struct {
 	HasNonStringArgs       bool // true if any arg needs strconv parsing
 	HasNonStringArrayFlags bool // true if any flag is a non-string array type needing strconv
 	HasObjectFlags         bool // true if any flag is type "object" or "object[]"
+	IsBinaryOutput         bool // true if tool output format is "binary"
 }
 
 type goModData struct {
@@ -411,6 +412,7 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 		HasNonStringArgs:       hasNonStringArgs,
 		HasNonStringArrayFlags: hasNonStringArrayFlags,
 		HasObjectFlags:         hasObjectFlags,
+		IsBinaryOutput:         tool.Output.Format == "binary",
 	}
 }
 
@@ -700,6 +702,9 @@ var (
 	{{$goName}}Flag{{.GoName}} {{.GoType}}
 {{- end}}
 {{- end}}
+{{- if .IsBinaryOutput}}
+	{{$goName}}FlagOutput string
+{{- end}}
 {{- if $hasAuth}}
 	{{$goName}}Token string
 {{- end}}
@@ -716,8 +721,11 @@ func init() {
 	_ = {{$goName}}Cmd.MarkFlagRequired("{{.Name}}")
 {{- end}}
 {{- end}}
+{{- if .IsBinaryOutput}}
+	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}FlagOutput, "output", "", "Output file path for binary data")
+{{- end}}
 {{- if $hasAuth}}
-	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv | esc}} env var)")
+	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag | esc}}", "", "Auth token (overrides {{$tokenEnv | esc}} env var)")
 {{- end}}
 	rootCmd.AddCommand({{$goName}}Cmd)
 }
@@ -825,10 +833,36 @@ var {{.GoName}}Cmd = &cobra.Command{
 			token = os.Getenv("{{$tokenEnv | esc}}")
 		}
 		if token == "" {
-			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag}}")
+			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag | esc}}")
 		}
 		_ = token // passed to the entrypoint via environment
 {{- end}}
+{{- if .IsBinaryOutput}}
+		// Binary output: detect TTY and handle appropriately.
+		fi, statErr := os.Stdout.Stat()
+		isTTY := statErr == nil && (fi.Mode()&os.ModeCharDevice) != 0
+		if isTTY && {{$goName}}FlagOutput == "" {
+			return fmt.Errorf("binary output requires --output <file> or pipe")
+		}
+		c := exec.CommandContext(cmd.Context(), "echo", "running", "{{$toolName}}")
+		c.Stderr = os.Stderr
+		if {{$goName}}FlagOutput != "" {
+			// --output provided: capture stdout and write to file.
+			out, err := c.Output()
+			if err != nil {
+				return fmt.Errorf("{{$toolName}} failed: %w", err)
+			}
+			if err := os.WriteFile({{$goName}}FlagOutput, out, 0644); err != nil {
+				return fmt.Errorf("writing output file: %w", err)
+			}
+		} else {
+			// No --output: stream directly to stdout (pipe mode).
+			c.Stdout = os.Stdout
+			if err := c.Run(); err != nil {
+				return fmt.Errorf("{{$toolName}} failed: %w", err)
+			}
+		}
+{{- else}}
 		// Execute the tool entrypoint.
 		c := exec.CommandContext(cmd.Context(), "echo", "running", "{{$toolName}}")
 		c.Stdout = os.Stdout
@@ -836,6 +870,7 @@ var {{.GoName}}Cmd = &cobra.Command{
 		if err := c.Run(); err != nil {
 			return fmt.Errorf("{{$toolName}} failed: %w", err)
 		}
+{{- end}}
 		return nil
 	},
 }

@@ -135,8 +135,64 @@ type Flag struct {
 
 // Output describes a tool's output format and optional schema.
 type Output struct {
-	Format string `yaml:"format"`
-	Schema string `yaml:"schema,omitempty"`
+	Format   string `yaml:"format"`
+	Schema   any    `yaml:"schema,omitempty"` // string path or map[string]any
+	MimeType string `yaml:"mimeType,omitempty"`
+}
+
+// UnmarshalYAML implements custom YAML unmarshalling for Output.
+// The type-alias decode naturally handles the Schema union: yaml/v3 decodes
+// a scalar schema: as string and a mapping schema: as map[string]any into
+// an any field.
+func (o *Output) UnmarshalYAML(value *yaml.Node) error {
+	type outputAlias Output
+	var alias outputAlias
+	if err := value.Decode(&alias); err != nil {
+		return err
+	}
+	*o = Output(alias)
+	return nil
+}
+
+// MarshalYAML implements custom YAML marshalling for Output to ensure
+// round-trip fidelity. The omitempty tag on Schema any treats "" (empty
+// string) as non-empty (it's a non-nil interface), so we emit it explicitly.
+// When Schema is nil it is omitted; when MimeType is empty it is omitted.
+func (o Output) MarshalYAML() (interface{}, error) {
+	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+
+	// format (omit when empty for backward compat with zero-value Output)
+	if o.Format != "" {
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "format"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: o.Format},
+		)
+	}
+
+	// schema (omit when nil)
+	if o.Schema != nil {
+		schemaKey := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "schema"}
+		var schemaVal yaml.Node
+		if err := schemaVal.Encode(o.Schema); err != nil {
+			return nil, fmt.Errorf("marshal output schema: %w", err)
+		}
+		// Encode wraps in a document node; unwrap it.
+		if schemaVal.Kind == yaml.DocumentNode && len(schemaVal.Content) == 1 {
+			node.Content = append(node.Content, schemaKey, schemaVal.Content[0])
+		} else {
+			node.Content = append(node.Content, schemaKey, &schemaVal)
+		}
+	}
+
+	// mimeType (omit when empty)
+	if o.MimeType != "" {
+		node.Content = append(node.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "mimeType"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: o.MimeType},
+		)
+	}
+
+	return node, nil
 }
 
 // Example represents a usage example for a tool.

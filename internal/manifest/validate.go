@@ -194,6 +194,8 @@ func validateTool(tool Tool, prefix string) []ValidationError {
 		errs = append(errs, validateAuth(*tool.Auth, prefix+".auth")...)
 	}
 
+	errs = append(errs, validateOutput(tool.Output, prefix+".output")...)
+
 	return errs
 }
 
@@ -587,6 +589,87 @@ func validateDefaultAgainstItemSchema(flag Flag, prefix string) []ValidationErro
 		Rule:     "type-mismatch",
 		Severity: SeverityError,
 	}}
+}
+
+func validateOutput(output Output, prefix string) []ValidationError {
+	var errs []ValidationError
+
+	// Validate Schema type.
+	switch s := output.Schema.(type) {
+	case nil:
+		// Accepted: no schema.
+	case string:
+		// File path reference; the generated code includes it as a comment.
+		// Codegen does not resolve the path — it is the user's responsibility
+		// to ensure the file exists at build time.
+		if s == "" {
+			errs = append(errs, ValidationError{
+				Path:     prefix + ".schema",
+				Message:  "output schema path must not be empty",
+				Rule:     "invalid-output-schema",
+				Severity: SeverityError,
+			})
+		}
+	case map[string]any:
+		// Validate type values recursively.
+		if err := checkItemSchemaTypeValues(s); err != nil {
+			errs = append(errs, ValidationError{
+				Path:     prefix + ".schema",
+				Message:  fmt.Sprintf("output schema is not a valid JSON Schema: %v", err),
+				Rule:     "invalid-output-schema",
+				Severity: SeverityError,
+			})
+			break
+		}
+		// Attempt compilation.
+		schemaBytes, err := json.Marshal(s)
+		if err != nil {
+			errs = append(errs, ValidationError{
+				Path:     prefix + ".schema",
+				Message:  fmt.Sprintf("output schema could not be marshaled: %v", err),
+				Rule:     "invalid-output-schema",
+				Severity: SeverityError,
+			})
+			break
+		}
+		compiler := jsonschema.NewCompiler()
+		if _, err := compiler.Compile(schemaBytes); err != nil {
+			errs = append(errs, ValidationError{
+				Path:     prefix + ".schema",
+				Message:  fmt.Sprintf("output schema is not a valid JSON Schema: %v", err),
+				Rule:     "invalid-output-schema",
+				Severity: SeverityError,
+			})
+		}
+	default:
+		errs = append(errs, ValidationError{
+			Path:     prefix + ".schema",
+			Message:  fmt.Sprintf("output schema must be a string (file path) or object (inline JSON Schema), got %T", output.Schema),
+			Rule:     "invalid-schema-type",
+			Severity: SeverityError,
+		})
+	}
+
+	// Validate binary format / mimeType relationship.
+	if output.Format == "binary" {
+		if strings.TrimSpace(output.MimeType) == "" {
+			errs = append(errs, ValidationError{
+				Path:     prefix + ".mimeType",
+				Message:  "binary format requires mimeType to be set",
+				Rule:     "binary-requires-mimetype",
+				Severity: SeverityError,
+			})
+		}
+	} else if strings.TrimSpace(output.MimeType) != "" {
+		errs = append(errs, ValidationError{
+			Path:     prefix + ".mimeType",
+			Message:  fmt.Sprintf("mimeType is only applicable to binary format, got format %q", output.Format),
+			Rule:     "mimetype-without-binary",
+			Severity: SeverityWarning,
+		})
+	}
+
+	return errs
 }
 
 func validateAuth(auth Auth, prefix string) []ValidationError {
