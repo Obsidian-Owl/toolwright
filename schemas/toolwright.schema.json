@@ -118,6 +118,16 @@
           "exit_codes": {
             "type": "object",
             "additionalProperties": { "type": "string" }
+          },
+          "annotations": {
+            "type": "object",
+            "properties": {
+              "readOnly": { "type": "boolean" },
+              "destructive": { "type": "boolean" },
+              "idempotent": { "type": "boolean" },
+              "openWorld": { "type": "boolean" },
+              "title": { "type": "string" }
+            }
           }
         }
       }
