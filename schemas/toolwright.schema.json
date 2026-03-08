@@ -91,7 +91,7 @@
           "output": {
             "type": "object",
             "properties": {
-              "format": { "type": "string" },
+              "format": { "type": "string", "enum": ["json", "text", "binary"] },
               "schema": {
                 "oneOf": [
                   { "type": "string" },

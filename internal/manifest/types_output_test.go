@@ -752,7 +752,12 @@ func TestOutput_RoundTrip_AllFields(t *testing.T) {
 	marshalled, err := yaml.Marshal(original)
 	require.NoError(t, err)
 
-	roundTripped, err := Parse(strings.NewReader(string(marshalled)))
+	yamlStr := string(marshalled)
+	assert.Contains(t, yamlStr, "schema:", "intermediate YAML must contain schema key")
+	assert.Contains(t, yamlStr, "mimeType:", "intermediate YAML must contain mimeType key")
+	assert.Contains(t, yamlStr, "format:", "intermediate YAML must contain format key")
+
+	roundTripped, err := Parse(strings.NewReader(yamlStr))
 	require.NoError(t, err)
 
 	if diff := cmp.Diff(original, roundTripped); diff != "" {
@@ -779,7 +784,12 @@ func TestOutput_RoundTrip_InlineSchemaWithMimeType(t *testing.T) {
 	marshalled, err := yaml.Marshal(original)
 	require.NoError(t, err)
 
-	roundTripped, err := Parse(strings.NewReader(string(marshalled)))
+	yamlStr := string(marshalled)
+	assert.Contains(t, yamlStr, "schema:", "intermediate YAML must contain schema key")
+	assert.Contains(t, yamlStr, "mimeType:", "intermediate YAML must contain mimeType key")
+	assert.Contains(t, yamlStr, "type: object", "intermediate YAML must contain inline schema type")
+
+	roundTripped, err := Parse(strings.NewReader(yamlStr))
 	require.NoError(t, err)
 
 	if diff := cmp.Diff(original, roundTripped); diff != "" {
@@ -1250,16 +1260,24 @@ func TestOutput_Schema_IntegerValueDoesNotPanic(t *testing.T) {
       format: json
       schema: 42
 `
-	// This should not panic. Whether it parses successfully or errors is
-	// implementation-dependent, but it must not crash.
+	// Must not panic. Parse may succeed (storing int in any) or error —
+	// either is acceptable, but we assert the outcome explicitly.
+	var parsed *Toolkit
+	var parseErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("Parse panicked on integer schema: %v", r)
+				t.Fatalf("Parse panicked on integer schema: %v", r)
 			}
 		}()
-		_, _ = Parse(strings.NewReader(input))
+		parsed, parseErr = Parse(strings.NewReader(input))
 	}()
+	if parseErr != nil {
+		return // error is an acceptable outcome
+	}
+	require.Len(t, parsed.Tools, 1)
+	assert.Equal(t, 42, parsed.Tools[0].Output.Schema,
+		"integer schema should be stored as-is in the any field")
 }
 
 func TestOutput_Schema_BooleanValueDoesNotPanic(t *testing.T) {
@@ -1270,14 +1288,22 @@ func TestOutput_Schema_BooleanValueDoesNotPanic(t *testing.T) {
       format: json
       schema: true
 `
+	var parsed *Toolkit
+	var parseErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("Parse panicked on boolean schema: %v", r)
+				t.Fatalf("Parse panicked on boolean schema: %v", r)
 			}
 		}()
-		_, _ = Parse(strings.NewReader(input))
+		parsed, parseErr = Parse(strings.NewReader(input))
 	}()
+	if parseErr != nil {
+		return
+	}
+	require.Len(t, parsed.Tools, 1)
+	assert.Equal(t, true, parsed.Tools[0].Output.Schema,
+		"boolean schema should be stored as-is in the any field")
 }
 
 func TestOutput_Schema_ArrayValueDoesNotPanic(t *testing.T) {
@@ -1290,12 +1316,20 @@ func TestOutput_Schema_ArrayValueDoesNotPanic(t *testing.T) {
         - item1
         - item2
 `
+	var parsed *Toolkit
+	var parseErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				t.Errorf("Parse panicked on array schema: %v", r)
+				t.Fatalf("Parse panicked on array schema: %v", r)
 			}
 		}()
-		_, _ = Parse(strings.NewReader(input))
+		parsed, parseErr = Parse(strings.NewReader(input))
 	}()
+	if parseErr != nil {
+		return
+	}
+	require.Len(t, parsed.Tools, 1)
+	assert.IsType(t, []any{}, parsed.Tools[0].Output.Schema,
+		"array schema should be stored as []any in the any field")
 }

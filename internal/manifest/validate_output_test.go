@@ -921,25 +921,17 @@ func TestValidateOutput_MultipleTools_ErrorReferencesCorrectIndex(t *testing.T) 
 // ---------------------------------------------------------------------------
 
 func TestValidateOutput_BinaryWithWhitespaceMimeType(t *testing.T) {
-	// A mimeType that is only whitespace should be treated as empty/missing.
-	// This catches implementations that only check `mimeType == ""` without
-	// trimming. Note: this depends on whether the implementation trims.
-	// If the implementation does NOT trim, this test documents that "   " is
-	// accepted (and the test should be adjusted). Either way, the test forces
-	// a conscious decision.
+	// A mimeType that is only whitespace must be treated as empty/missing.
+	// The implementation uses strings.TrimSpace, so "   " is rejected.
 	tk := validToolkitWithOutput(Output{
 		Format:   "binary",
 		MimeType: "   ",
 	})
 
 	errs := Validate(tk)
-	// We check for the error — a robust implementation should reject whitespace-only.
 	ve := findErrorByRule(errs, "binary-requires-mimetype")
-	// If this assertion fails, it means whitespace-only mimeType is accepted.
-	// Adjust the test if that is the intended behavior.
-	if ve != nil {
-		assert.Equal(t, SeverityError, ve.Severity,
-			"Whitespace-only mimeType should be rejected as missing")
-	}
-	// At minimum, we ensure no panic or unexpected error type.
+	require.NotNil(t, ve,
+		"whitespace-only mimeType must trigger binary-requires-mimetype")
+	assert.Equal(t, SeverityError, ve.Severity,
+		"whitespace-only mimeType should be rejected as missing")
 }

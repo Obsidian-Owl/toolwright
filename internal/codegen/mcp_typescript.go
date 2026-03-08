@@ -577,7 +577,7 @@ import { validateRequest } from "../auth/middleware.js";
 // Tool: {{.ToolName}}
 // Description: {{.Description}}
 {{- if .SchemaPath}}
-// Output schema: {{.SchemaPath}} (resolved at build time)
+// Output schema: {{.SchemaPath | esc}} (resolved at build time)
 {{- end}}
 
 // Input schema for {{.ToolName}}

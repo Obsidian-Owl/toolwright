@@ -486,6 +486,7 @@ func TestSchemaOutput_OutputAsNonObject_Fails(t *testing.T) {
 		{name: "number", value: `42`},
 		{name: "array", value: `["json"]`},
 		{name: "boolean", value: `true`},
+		{name: "null", value: `null`},
 	}
 	for _, tc := range wrongTypes {
 		t.Run(tc.name, func(t *testing.T) {

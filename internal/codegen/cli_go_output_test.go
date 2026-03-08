@@ -252,10 +252,8 @@ func TestGoCLI_BinaryOutput_TTYDetection_HasStatCall(t *testing.T) {
 	files := generateCLI(t, manifestBinaryTool())
 	content := fileContent(t, files, "internal/commands/screenshot.go")
 
-	assert.True(t,
-		strings.Contains(content, "os.Stdout.Stat()") ||
-			strings.Contains(content, "Stat()"),
-		"binary tool RunE must call os.Stdout.Stat() for TTY detection")
+	assert.Contains(t, content, "os.Stdout.Stat()",
+		"binary tool RunE must call os.Stdout.Stat() specifically for TTY detection")
 }
 
 func TestGoCLI_BinaryOutput_TTYDetection_ChecksModeCharDevice(t *testing.T) {

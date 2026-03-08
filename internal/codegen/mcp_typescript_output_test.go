@@ -239,8 +239,8 @@ func TestTSMCP_OutputSchema_StringSchemaEmitsComment(t *testing.T) {
 	files := generateTSMCP(t, m)
 	content := fileContent(t, files, "src/tools/get_data.ts")
 
-	assert.Contains(t, content, "schemas/output.json",
-		"string schema path must appear in generated code (as a comment)")
+	assert.Contains(t, content, "// Output schema: schemas/output.json",
+		"string schema path must appear inside a // comment line")
 }
 
 func TestTSMCP_OutputSchema_StringSchemaDoesNotEmitInlineOutputSchema(t *testing.T) {
@@ -376,26 +376,36 @@ func TestTSMCP_BinaryOutput_DoesNotReturnTextType(t *testing.T) {
 	files := generateTSMCP(t, m)
 	content := fileContent(t, files, "src/tools/screenshot.ts")
 
-	// The handler function body is between handle_screenshot and the export.
-	// We need to check the handler's return, not the entire file.
+	// Isolate the handler function body (from handle_screenshot to the next
+	// top-level function declaration or export). This is more robust than
+	// trying to find "return {" and guessing closing braces.
 	handlerIdx := strings.Index(content, "handle_screenshot")
 	require.Greater(t, handlerIdx, 0, "handle_screenshot must exist")
 	afterHandler := content[handlerIdx:]
 
-	// Look for the return statement area. A binary tool must NOT have
-	// { type: "text", text: "..." } as its return.
-	// Allow "text" in comments or descriptions, but NOT in the return content array.
-	returnIdx := strings.Index(afterHandler, "return {")
-	require.Greater(t, returnIdx, 0, "handler must have a return statement")
-	returnBlock := afterHandler[returnIdx:]
-	// Take just the return block (up to the next function or end of handler)
-	endIdx := strings.Index(returnBlock, "}\n}")
-	if endIdx > 0 {
-		returnBlock = returnBlock[:endIdx+3]
+	// The handler ends at the next top-level declaration (export/function/const at col 0).
+	// Split into lines and collect until we hit a line starting with a
+	// top-level keyword after the handler signature.
+	lines := strings.Split(afterHandler, "\n")
+	var handlerLines []string
+	started := false
+	for _, line := range lines {
+		if !started {
+			started = true
+			handlerLines = append(handlerLines, line)
+			continue
+		}
+		// Stop at next top-level declaration
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "export ") || strings.HasPrefix(trimmed, "/**") {
+			break
+		}
+		handlerLines = append(handlerLines, line)
 	}
 
-	assert.NotContains(t, returnBlock, `type: "text"`,
-		"binary tool return block must NOT contain type: \"text\"")
+	handlerBody := strings.Join(handlerLines, "\n")
+	assert.NotContains(t, handlerBody, `type: "text"`,
+		"binary tool handler must NOT contain type: \"text\"")
 }
 
 func TestTSMCP_BinaryOutput_IncludesBase64Encoding(t *testing.T) {

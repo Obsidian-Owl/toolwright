@@ -725,7 +725,7 @@ func init() {
 	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}FlagOutput, "output", "", "Output file path for binary data")
 {{- end}}
 {{- if $hasAuth}}
-	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag}}", "", "Auth token (overrides {{$tokenEnv | esc}} env var)")
+	{{$goName}}Cmd.Flags().StringVar(&{{$goName}}Token, "{{$tokenFlag | esc}}", "", "Auth token (overrides {{$tokenEnv | esc}} env var)")
 {{- end}}
 	rootCmd.AddCommand({{$goName}}Cmd)
 }
@@ -833,7 +833,7 @@ var {{.GoName}}Cmd = &cobra.Command{
 			token = os.Getenv("{{$tokenEnv | esc}}")
 		}
 		if token == "" {
-			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag}}")
+			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag | esc}}")
 		}
 		_ = token // passed to the entrypoint via environment
 {{- end}}
