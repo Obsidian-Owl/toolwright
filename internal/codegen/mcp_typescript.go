@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -151,16 +152,21 @@ type tsAnnotations struct {
 }
 
 type tsToolData struct {
-	ToolName       string
-	Description    string
-	Args           []tsArgData
-	Flags          []tsFlagData
-	HasAuth        bool
-	AuthType       string
-	TokenEnv       string
-	HasAnnotations bool
-	Annotations    tsAnnotations
-	Title          string
+	ToolName        string
+	Description     string
+	Args            []tsArgData
+	Flags           []tsFlagData
+	HasAuth         bool
+	AuthType        string
+	TokenEnv        string
+	HasAnnotations  bool
+	Annotations     tsAnnotations
+	Title           string
+	HasOutputSchema bool
+	OutputSchema    string // JSON string of the schema object
+	SchemaPath      string // set when Schema is a file-path string
+	IsBinaryOutput  bool
+	MimeType        string
 }
 
 type indexData struct {
@@ -414,17 +420,43 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) tsToolData {
 			title != ""
 	}
 
+	// Output schema
+	var hasOutputSchema bool
+	var outputSchemaJSON string
+	var schemaPath string
+	if schemaMap, ok := tool.Output.Schema.(map[string]any); ok {
+		jsonBytes, err := json.Marshal(schemaMap)
+		if err == nil {
+			hasOutputSchema = true
+			outputSchemaJSON = string(jsonBytes)
+		}
+	} else if s, ok := tool.Output.Schema.(string); ok {
+		schemaPath = s
+	}
+
+	// Binary output
+	isBinaryOutput := tool.Output.Format == "binary"
+	mimeType := ""
+	if isBinaryOutput {
+		mimeType = tool.Output.MimeType
+	}
+
 	return tsToolData{
-		ToolName:       tool.Name,
-		Description:    tool.Description,
-		Args:           args,
-		Flags:          flags,
-		HasAuth:        hasAuth,
-		AuthType:       auth.Type,
-		TokenEnv:       auth.TokenEnv,
-		HasAnnotations: hasAnnotations,
-		Annotations:    annot,
-		Title:          title,
+		ToolName:        tool.Name,
+		Description:     tool.Description,
+		Args:            args,
+		Flags:           flags,
+		HasAuth:         hasAuth,
+		AuthType:        auth.Type,
+		TokenEnv:        auth.TokenEnv,
+		HasAnnotations:  hasAnnotations,
+		Annotations:     annot,
+		Title:           title,
+		HasOutputSchema: hasOutputSchema,
+		OutputSchema:    outputSchemaJSON,
+		SchemaPath:      schemaPath,
+		IsBinaryOutput:  isBinaryOutput,
+		MimeType:        mimeType,
 	}
 }
 
@@ -544,6 +576,9 @@ import { validateRequest } from "../auth/middleware.js";
 
 // Tool: {{.ToolName}}
 // Description: {{.Description}}
+{{- if .SchemaPath}}
+// Output schema: {{.SchemaPath}} (resolved at build time)
+{{- end}}
 
 // Input schema for {{.ToolName}}
 const inputSchema = z.object({
@@ -561,7 +596,11 @@ type {{.ToolName}}Input = z.infer<typeof inputSchema>;
  * Handler for the {{.ToolName}} tool.
  * {{.Description}}
  */
+{{- if .IsBinaryOutput}}
+async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ content: Array<{ type: string; data: string; mimeType: string }> }> {
+{{- else}}
 async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ content: Array<{ type: string; text: string }> }> {
+{{- end}}
 {{- if .HasAuth}}
   // Resolve auth: read from environment variable {{.TokenEnv}}
   const envToken = process.env["{{.TokenEnv | esc}}"];
@@ -576,9 +615,20 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
   const {{.Name}}: {{.TSType}} | undefined = input.{{.Name}};
 {{- end}}
   // TODO: implement {{.ToolName}} logic
+{{- if .IsBinaryOutput}}
+  const stdout = ""; // TODO: replace with actual binary output
+  return {
+    content: [{
+      type: "image",
+      data: Buffer.from(stdout).toString("base64"),
+      mimeType: "{{.MimeType | esc}}",
+    }],
+  };
+{{- else}}
   return {
     content: [{ type: "text", text: "{{.ToolName | esc}} executed" }],
   };
+{{- end}}
 }
 
 /**
@@ -589,7 +639,7 @@ export function register(server: McpServer): void {
     "{{.ToolName | esc}}",
     "{{.Description | esc}}",
     inputSchema.shape,
-{{- if .HasAnnotations}}
+{{- if or .HasAnnotations .HasOutputSchema}}
     {
 {{- if or .Annotations.ReadOnly .Annotations.Destructive .Annotations.Idempotent .Annotations.OpenWorld}}
       annotations: {
@@ -610,6 +660,9 @@ export function register(server: McpServer): void {
 {{- end}}
 {{- if .Title}}
       title: "{{.Title | esc}}",
+{{- end}}
+{{- if .HasOutputSchema}}
+      outputSchema: {{.OutputSchema}},
 {{- end}}
     },
 {{- end}}
