@@ -856,6 +856,18 @@ func TestTSMCP_Resource_ValidURIParam_AcceptsAlphanumeric(t *testing.T) {
 	assert.Contains(t, content, "repo456")
 }
 
+func TestTSMCP_Resource_InvalidURIParam_RejectsDuplicate(t *testing.T) {
+	// A URI with duplicate params like db://{id}/items/{id} must be rejected.
+	m := mcpManifestSingleResource()
+	m.Resources[0].URI = `db://{id}/items/{id}`
+	gen := NewTSMCPGenerator()
+	data := TemplateData{Manifest: m, Timestamp: "2026-03-09T00:00:00Z", Version: "0.1.0"}
+	_, err := gen.Generate(context.Background(), data, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "appears more than once",
+		"must reject duplicate URI template parameters")
+}
+
 // ---------------------------------------------------------------------------
 // Resource handler is not placed in the tools directory
 // ---------------------------------------------------------------------------

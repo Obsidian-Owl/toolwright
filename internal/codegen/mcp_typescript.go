@@ -18,16 +18,21 @@ var uriParamRe = regexp.MustCompile(`\{([^}]+)\}`)
 // validIdentifier matches safe JavaScript/TypeScript identifier names.
 var validIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// extractURIParams returns the list of parameter names found in a URI template.
-// Returns an error if any parameter name is not a valid identifier.
+// extractURIParams returns the list of unique parameter names found in a URI template.
+// Returns an error if any parameter name is not a valid identifier or appears more than once.
 func extractURIParams(uri string) ([]string, error) {
 	matches := uriParamRe.FindAllStringSubmatch(uri, -1)
 	params := make([]string, 0, len(matches))
+	seen := make(map[string]bool, len(matches))
 	for _, m := range matches {
 		name := m[1]
 		if !validIdentifier.MatchString(name) {
 			return nil, fmt.Errorf("URI template parameter %q is not a valid identifier", name)
 		}
+		if seen[name] {
+			return nil, fmt.Errorf("URI template parameter %q appears more than once", name)
+		}
+		seen[name] = true
 		params = append(params, name)
 	}
 	return params, nil
@@ -603,7 +608,7 @@ func renderTSTemplate(name, tmplStr string, data any) ([]byte, error) {
 // Templates
 // ---------------------------------------------------------------------------
 
-const indexTSTmpl = `import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+const indexTSTmpl = `import { McpServer{{if .Resources}}, ResourceTemplate{{end}} } from "@modelcontextprotocol/sdk/server/mcp.js";
 {{- if .HasStdio}}
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 {{- end}}
@@ -621,7 +626,7 @@ import { register as register_search_tools } from "./search.js";
 
 // Import resource handlers
 {{- range .Resources}}
-import { register as register_{{.Name}} } from "./resources/{{.Name}}.js";
+import { handle as handle_{{.Name}} } from "./resources/{{.Name}}.js";
 {{- end}}
 {{- end}}
 
@@ -643,7 +648,7 @@ register_search_tools(server);
 server.resource(
   "{{.Name | esc}}",
   new ResourceTemplate("{{.URI | esc}}", { list: undefined }),
-  register_{{.Name}},
+  handle_{{.Name}},
 );
 {{- end}}
 {{- end}}
@@ -801,7 +806,7 @@ const execFile = promisify(execFileCb);
  * Handler for the {{.Name}} resource.
  * Executes {{.Entrypoint}} with URI parameters as arguments.
  */
-export async function register(
+export async function handle(
   uri: URL,
   { {{joinStrings .URIParams ", "}} }: { {{- range $i, $p := .URIParams}}{{if $i}}, {{end}}{{$p}}: string{{end}} },
 ): Promise<{ contents: Array<{ uri: string; mimeType: string; text: string }> }> {

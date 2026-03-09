@@ -530,6 +530,118 @@ func TestValidateResource_RulesAreDistinct(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Resource name format validation
+// ---------------------------------------------------------------------------
+
+func TestValidateResource_NameWithSpaces_Fails(t *testing.T) {
+	r := validResource()
+	r.Name = "my resource"
+	tk := validToolkitWithResources(r)
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "resource-name-format")
+	require.NotNil(t, ve,
+		"resource name with spaces must emit 'resource-name-format'")
+	assert.Contains(t, ve.Message, "my resource")
+}
+
+func TestValidateResource_NameStartsWithNumber_Fails(t *testing.T) {
+	r := validResource()
+	r.Name = "123-resource"
+	tk := validToolkitWithResources(r)
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "resource-name-format")
+	require.NotNil(t, ve,
+		"resource name starting with number must emit 'resource-name-format'")
+}
+
+func TestValidateResource_NameWithSpecialChars_Fails(t *testing.T) {
+	r := validResource()
+	r.Name = "../../etc/passwd"
+	tk := validToolkitWithResources(r)
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "resource-name-format")
+	require.NotNil(t, ve,
+		"resource name with path traversal must emit 'resource-name-format'")
+}
+
+func TestValidateResource_ValidNameFormats(t *testing.T) {
+	names := []string{"file-reader", "dbRecord", "Config_Value", "x"}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			r := validResource()
+			r.Name = name
+			tk := validToolkitWithResources(r)
+
+			errs := Validate(tk)
+			ve := findErrorByRule(errs, "resource-name-format")
+			assert.Nil(t, ve,
+				"resource name %q must pass format validation", name)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate resource URIs
+// ---------------------------------------------------------------------------
+
+func TestValidateResource_DuplicateURIs(t *testing.T) {
+	r1 := Resource{
+		URI:        "file://{path}",
+		Name:       "reader-a",
+		Entrypoint: "./a.sh",
+	}
+	r2 := Resource{
+		URI:        "file://{path}",
+		Name:       "reader-b",
+		Entrypoint: "./b.sh",
+	}
+	tk := validToolkitWithResources(r1, r2)
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "unique-resource-uri")
+	require.NotNil(t, ve,
+		"duplicate URIs must emit 'unique-resource-uri'")
+	assert.Contains(t, ve.Message, "file://{path}")
+}
+
+func TestValidateResource_DifferentURIs_NoDuplicate(t *testing.T) {
+	r1 := Resource{
+		URI:        "file://{path}",
+		Name:       "reader-a",
+		Entrypoint: "./a.sh",
+	}
+	r2 := Resource{
+		URI:        "db://{id}",
+		Name:       "reader-b",
+		Entrypoint: "./b.sh",
+	}
+	tk := validToolkitWithResources(r1, r2)
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "unique-resource-uri")
+	assert.Nil(t, ve,
+		"different URIs must not emit 'unique-resource-uri'")
+}
+
+func TestValidateResource_BlankNamesDontTriggerDuplicate(t *testing.T) {
+	// Two resources with blank names should get name-required but not unique-resource-name.
+	r1 := Resource{URI: "file:///a", Name: "", Entrypoint: "./a.sh"}
+	r2 := Resource{URI: "file:///b", Name: "", Entrypoint: "./b.sh"}
+	tk := validToolkitWithResources(r1, r2)
+
+	errs := Validate(tk)
+	ve := findErrorByRule(errs, "unique-resource-name")
+	assert.Nil(t, ve,
+		"blank names must not trigger duplicate name error")
+	nameReq := countErrorsByRule(errs, "resource-name-required")
+	assert.Equal(t, 2, nameReq,
+		"both blank names must emit resource-name-required")
+}
+
+// ---------------------------------------------------------------------------
 // Helpers local to this file
 // ---------------------------------------------------------------------------
 
@@ -541,8 +653,10 @@ func filterResourceErrors(errs []ValidationError) []ValidationError {
 		switch e.Rule {
 		case "resource-uri-required",
 			"resource-name-required",
+			"resource-name-format",
 			"resource-entrypoint-required",
-			"unique-resource-name":
+			"unique-resource-name",
+			"unique-resource-uri":
 			out = append(out, e)
 		}
 	}
