@@ -10,12 +10,22 @@ import (
 
 // Toolkit represents a parsed toolwright manifest.
 type Toolkit struct {
-	APIVersion string   `yaml:"apiVersion"`
-	Kind       string   `yaml:"kind"`
-	Metadata   Metadata `yaml:"metadata"`
-	Tools      []Tool   `yaml:"tools"`
-	Auth       *Auth    `yaml:"auth,omitempty"`
-	Generate   Generate `yaml:"generate,omitempty"`
+	APIVersion string     `yaml:"apiVersion"`
+	Kind       string     `yaml:"kind"`
+	Metadata   Metadata   `yaml:"metadata"`
+	Tools      []Tool     `yaml:"tools"`
+	Auth       *Auth      `yaml:"auth,omitempty"`
+	Generate   Generate   `yaml:"generate,omitempty"`
+	Resources  []Resource `yaml:"resources,omitempty"`
+}
+
+// Resource represents a static or dynamic data source exposed by a toolkit.
+type Resource struct {
+	URI         string `yaml:"uri"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	MimeType    string `yaml:"mimeType,omitempty"`
+	Entrypoint  string `yaml:"entrypoint"`
 }
 
 // Metadata holds toolkit metadata fields.

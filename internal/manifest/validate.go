@@ -35,6 +35,10 @@ var (
 	// JavaScript identifiers. This prevents code injection into generated
 	// TypeScript (buildZodObject) where property names are emitted unquoted.
 	propertyNameRe = regexp.MustCompile(`^[a-zA-Z_$][a-zA-Z0-9_$]*$`)
+	// resourceNameRe validates resource names: must start with a letter and
+	// contain only alphanumerics, hyphens, or underscores. Used as file path
+	// components and TypeScript identifier suffixes in generated code.
+	resourceNameRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
 )
 
 // validFlagTypes is the complete set of recognised flag types.
@@ -62,9 +66,77 @@ func Validate(t *Toolkit) []ValidationError {
 
 	errs = append(errs, validateMetadata(t.Metadata)...)
 	errs = append(errs, validateTools(t.Tools)...)
+	errs = append(errs, validateResources(t.Resources)...)
 
 	if t.Auth != nil {
 		errs = append(errs, validateAuth(*t.Auth, "auth")...)
+	}
+
+	return errs
+}
+
+func validateResources(resources []Resource) []ValidationError {
+	var errs []ValidationError
+
+	// Check for duplicate resource names and URIs (case-sensitive).
+	seenNames := make(map[string]bool)
+	seenURIs := make(map[string]bool)
+	for i, r := range resources {
+		if r.Name != "" && seenNames[r.Name] {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].name", i),
+				Message:  fmt.Sprintf("resource name %q is not unique", r.Name),
+				Rule:     "unique-resource-name",
+				Severity: SeverityError,
+			})
+		}
+		seenNames[r.Name] = true
+
+		if r.URI != "" && seenURIs[r.URI] {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].uri", i),
+				Message:  fmt.Sprintf("resource URI %q is not unique", r.URI),
+				Rule:     "unique-resource-uri",
+				Severity: SeverityError,
+			})
+		}
+		seenURIs[r.URI] = true
+	}
+
+	// Validate required fields and name format for each resource.
+	for i, r := range resources {
+		if strings.TrimSpace(r.URI) == "" {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].uri", i),
+				Message:  "uri is required",
+				Rule:     "resource-uri-required",
+				Severity: SeverityError,
+			})
+		}
+		name := strings.TrimSpace(r.Name)
+		if name == "" {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].name", i),
+				Message:  "name is required",
+				Rule:     "resource-name-required",
+				Severity: SeverityError,
+			})
+		} else if !resourceNameRe.MatchString(name) {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].name", i),
+				Message:  fmt.Sprintf("resource name %q must match %s", name, resourceNameRe.String()),
+				Rule:     "resource-name-format",
+				Severity: SeverityError,
+			})
+		}
+		if strings.TrimSpace(r.Entrypoint) == "" {
+			errs = append(errs, ValidationError{
+				Path:     fmt.Sprintf("resources[%d].entrypoint", i),
+				Message:  "entrypoint is required",
+				Rule:     "resource-entrypoint-required",
+				Severity: SeverityError,
+			})
+		}
 	}
 
 	return errs
