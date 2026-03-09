@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -794,6 +795,65 @@ func TestTSMCP_Resource_IndexRegistersViaImportedFunction(t *testing.T) {
 	assert.True(t, hasImport && hasRegistration,
 		"index.ts must both import resource handler and call server.resource(); import=%v, registration=%v",
 		hasImport, hasRegistration)
+}
+
+// ---------------------------------------------------------------------------
+// URI template parameter validation
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_Resource_InvalidURIParam_RejectsInjection(t *testing.T) {
+	// A URI with a parameter containing code injection must be rejected.
+	m := mcpManifestSingleResource()
+	m.Resources[0].URI = `file://{"; process.exit(1);//}`
+	gen := NewTSMCPGenerator()
+	data := TemplateData{Manifest: m, Timestamp: "2026-03-09T00:00:00Z", Version: "0.1.0"}
+	_, err := gen.Generate(context.Background(), data, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a valid identifier",
+		"must reject URI param that is not a safe identifier")
+}
+
+func TestTSMCP_Resource_InvalidURIParam_RejectsSpaces(t *testing.T) {
+	m := mcpManifestSingleResource()
+	m.Resources[0].URI = `file:///{bad param}`
+	gen := NewTSMCPGenerator()
+	data := TemplateData{Manifest: m, Timestamp: "2026-03-09T00:00:00Z", Version: "0.1.0"}
+	_, err := gen.Generate(context.Background(), data, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a valid identifier")
+}
+
+func TestTSMCP_Resource_InvalidURIParam_RejectsDotPath(t *testing.T) {
+	m := mcpManifestSingleResource()
+	m.Resources[0].URI = `file:///{../etc/passwd}`
+	gen := NewTSMCPGenerator()
+	data := TemplateData{Manifest: m, Timestamp: "2026-03-09T00:00:00Z", Version: "0.1.0"}
+	_, err := gen.Generate(context.Background(), data, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a valid identifier")
+}
+
+func TestTSMCP_Resource_ValidURIParam_AcceptsUnderscore(t *testing.T) {
+	m := mcpManifestSingleResource()
+	m.Resources[0].URI = `file:///{_path}`
+	gen := NewTSMCPGenerator()
+	data := TemplateData{Manifest: m, Timestamp: "2026-03-09T00:00:00Z", Version: "0.1.0"}
+	files, err := gen.Generate(context.Background(), data, "")
+	require.NoError(t, err)
+	content := fileContent(t, files, "src/resources/file_reader.ts")
+	assert.Contains(t, content, "_path")
+}
+
+func TestTSMCP_Resource_ValidURIParam_AcceptsAlphanumeric(t *testing.T) {
+	m := mcpManifestSingleResource()
+	m.Resources[0].URI = `github://{owner123}/{repo456}`
+	gen := NewTSMCPGenerator()
+	data := TemplateData{Manifest: m, Timestamp: "2026-03-09T00:00:00Z", Version: "0.1.0"}
+	files, err := gen.Generate(context.Background(), data, "")
+	require.NoError(t, err)
+	content := fileContent(t, files, "src/resources/file_reader.ts")
+	assert.Contains(t, content, "owner123")
+	assert.Contains(t, content, "repo456")
 }
 
 // ---------------------------------------------------------------------------

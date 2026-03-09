@@ -15,14 +15,22 @@ import (
 // uriParamRe matches {param} placeholders in a URI template.
 var uriParamRe = regexp.MustCompile(`\{([^}]+)\}`)
 
+// validIdentifier matches safe JavaScript/TypeScript identifier names.
+var validIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
 // extractURIParams returns the list of parameter names found in a URI template.
-func extractURIParams(uri string) []string {
+// Returns an error if any parameter name is not a valid identifier.
+func extractURIParams(uri string) ([]string, error) {
 	matches := uriParamRe.FindAllStringSubmatch(uri, -1)
 	params := make([]string, 0, len(matches))
 	for _, m := range matches {
-		params = append(params, m[1])
+		name := m[1]
+		if !validIdentifier.MatchString(name) {
+			return nil, fmt.Errorf("URI template parameter %q is not a valid identifier", name)
+		}
+		params = append(params, name)
 	}
-	return params
+	return params, nil
 }
 
 // TSMCPGenerator generates TypeScript MCP server projects.
@@ -90,13 +98,17 @@ func (g *TSMCPGenerator) Generate(ctx context.Context, data TemplateData, _ stri
 		if mimeType == "" {
 			mimeType = "text/plain"
 		}
+		uriParams, uriErr := extractURIParams(res.URI)
+		if uriErr != nil {
+			return nil, fmt.Errorf("resource %q: %w", res.Name, uriErr)
+		}
 		resData := tsResourceData{
 			Name:        res.Name,
 			Description: res.Description,
 			URI:         res.URI,
 			MimeType:    mimeType,
 			Entrypoint:  res.Entrypoint,
-			URIParams:   extractURIParams(res.URI),
+			URIParams:   uriParams,
 		}
 		var resFile []byte
 		resFile, err = renderTSTemplate("resource.ts", tsResourceTmpl, resData)

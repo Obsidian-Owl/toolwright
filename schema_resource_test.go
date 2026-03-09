@@ -412,8 +412,10 @@ func TestSchemaResource_MissingURI_Fails(t *testing.T) {
 		"entrypoint": "./resources/test.sh"
 	}]`)
 	err := validateJSON(t, manifest)
-	assert.Error(t, err,
+	require.Error(t, err,
 		"resource missing 'uri' must fail schema validation")
+	assert.Contains(t, err.Error(), "uri",
+		"error must reference the missing 'uri' field")
 }
 
 func TestSchemaResource_MissingName_Fails(t *testing.T) {
@@ -424,8 +426,10 @@ func TestSchemaResource_MissingName_Fails(t *testing.T) {
 		"entrypoint": "./resources/test.sh"
 	}]`)
 	err := validateJSON(t, manifest)
-	assert.Error(t, err,
+	require.Error(t, err,
 		"resource missing 'name' must fail schema validation")
+	assert.Contains(t, err.Error(), "name",
+		"error must reference the missing 'name' field")
 }
 
 func TestSchemaResource_MissingEntrypoint_Fails(t *testing.T) {
@@ -436,8 +440,10 @@ func TestSchemaResource_MissingEntrypoint_Fails(t *testing.T) {
 		"description": "Missing entrypoint"
 	}]`)
 	err := validateJSON(t, manifest)
-	assert.Error(t, err,
+	require.Error(t, err,
 		"resource missing 'entrypoint' must fail schema validation")
+	assert.Contains(t, err.Error(), "entrypoint",
+		"error must reference the missing 'entrypoint' field")
 }
 
 func TestSchemaResource_MissingAllRequired_Fails(t *testing.T) {
@@ -523,8 +529,10 @@ func TestSchemaResource_URIWrongType_Fails(t *testing.T) {
 				"entrypoint": "./resources/test.sh"
 			}]`)
 			err := validateJSON(t, manifest)
-			assert.Error(t, err,
+			require.Error(t, err,
 				"resource with uri as %s must fail schema validation", tc.name)
+			assert.Contains(t, err.Error(), "uri",
+				"error must reference the 'uri' field")
 		})
 	}
 }
@@ -548,8 +556,10 @@ func TestSchemaResource_NameWrongType_Fails(t *testing.T) {
 				"entrypoint": "./resources/test.sh"
 			}]`)
 			err := validateJSON(t, manifest)
-			assert.Error(t, err,
+			require.Error(t, err,
 				"resource with name as %s must fail schema validation", tc.name)
+			assert.Contains(t, err.Error(), "name",
+				"error must reference the 'name' field")
 		})
 	}
 }
@@ -573,8 +583,10 @@ func TestSchemaResource_EntrypointWrongType_Fails(t *testing.T) {
 				"entrypoint": ` + tc.value + `
 			}]`)
 			err := validateJSON(t, manifest)
-			assert.Error(t, err,
+			require.Error(t, err,
 				"resource with entrypoint as %s must fail schema validation", tc.name)
+			assert.Contains(t, err.Error(), "entrypoint",
+				"error must reference the 'entrypoint' field")
 		})
 	}
 }
@@ -680,8 +692,9 @@ func TestSchemaResource_EachRequiredFieldMissing_Individually(t *testing.T) {
 	// Table-driven: remove one required field at a time. Each must fail independently.
 	// This catches schemas that only enforce some required fields.
 	tests := []struct {
-		name     string
-		resource string
+		name      string
+		resource  string
+		wantField string
 	}{
 		{
 			name: "missing uri only",
@@ -689,6 +702,7 @@ func TestSchemaResource_EachRequiredFieldMissing_Individually(t *testing.T) {
 				"name": "no-uri",
 				"entrypoint": "./resources/test.sh"
 			}`,
+			wantField: "uri",
 		},
 		{
 			name: "missing name only",
@@ -696,6 +710,7 @@ func TestSchemaResource_EachRequiredFieldMissing_Individually(t *testing.T) {
 				"uri": "file:///data/item",
 				"entrypoint": "./resources/test.sh"
 			}`,
+			wantField: "name",
 		},
 		{
 			name: "missing entrypoint only",
@@ -703,14 +718,17 @@ func TestSchemaResource_EachRequiredFieldMissing_Individually(t *testing.T) {
 				"uri": "file:///data/item",
 				"name": "no-ep"
 			}`,
+			wantField: "entrypoint",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			manifest := minimalManifestWithResources(`[` + tc.resource + `]`)
 			err := validateJSON(t, manifest)
-			assert.Error(t, err,
+			require.Error(t, err,
 				"resource with %s must fail schema validation", tc.name)
+			assert.Contains(t, err.Error(), tc.wantField,
+				"error must reference the missing %q field", tc.wantField)
 		})
 	}
 }
