@@ -2140,3 +2140,844 @@ func TestTSMCP_Object_CrossCutting_RequiredObjectRecord_NoOptional(t *testing.T)
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// AC3/AC4/AC6: Entrypoint wiring tests
+// ---------------------------------------------------------------------------
+
+// mcpManifestEntrypointWiring returns a kitchen-sink manifest for entrypoint
+// wiring tests: positional args, typed flags, array flag, object flag,
+// token auth with TokenFlag.
+func mcpManifestEntrypointWiring() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "wire-mcp-server",
+			Version:     "1.0.0",
+			Description: "Entrypoint wiring MCP server",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "run_job",
+				Description: "Run a job on the cluster",
+				Entrypoint:  "/usr/local/bin/run-job",
+				Auth: &manifest.Auth{
+					Type:      "token",
+					TokenEnv:  "JOB_TOKEN",
+					TokenFlag: "--api-key",
+				},
+				Args: []manifest.Arg{
+					{Name: "job_name", Type: "string", Required: true, Description: "Name of the job"},
+					{Name: "priority", Type: "int", Required: false, Description: "Job priority"},
+				},
+				Flags: []manifest.Flag{
+					{Name: "verbose", Type: "bool", Required: false, Default: false, Description: "Verbose output"},
+					{Name: "retries", Type: "int", Required: false, Default: 3, Description: "Number of retries"},
+					{Name: "threshold", Type: "float", Required: false, Default: 0.5, Description: "Score threshold"},
+					{Name: "label", Type: "string", Required: false, Description: "Job label"},
+					{Name: "tags", Type: "string[]", Required: false, Description: "Tags to apply"},
+					{Name: "config", Type: "object", Required: false, Description: "Config object"},
+				},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+}
+
+// mcpManifestEntrypointBinaryOutput returns a manifest with a binary-output
+// tool and token auth, for testing execFile with encoding: "buffer".
+func mcpManifestEntrypointBinaryOutput() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "binary-wire-server",
+			Version:     "1.0.0",
+			Description: "Binary output wiring test",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "render_image",
+				Description: "Render an image",
+				Entrypoint:  "/opt/render",
+				Output:      manifest.Output{Format: "binary", MimeType: "image/png"},
+				Auth: &manifest.Auth{
+					Type:      "token",
+					TokenEnv:  "RENDER_TOKEN",
+					TokenFlag: "--auth-token",
+				},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+}
+
+// mcpManifestEntrypointNoAuth returns a manifest with a tool that has no auth,
+// used to verify no token-related code is emitted for no-auth tools.
+func mcpManifestEntrypointNoAuth() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "noauth-wire-server",
+			Version:     "1.0.0",
+			Description: "No-auth wiring test",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "list_files",
+				Description: "List directory files",
+				Entrypoint:  "/usr/bin/ls",
+				Auth:        &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{Name: "all", Type: "bool", Required: false, Description: "Show hidden files"},
+				},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+}
+
+// mcpManifestEmptyEntrypoint returns a manifest where the tool has an empty
+// entrypoint, used to verify the guard is emitted.
+func mcpManifestEmptyEntrypoint() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "empty-ep-server",
+			Version:     "1.0.0",
+			Description: "Empty entrypoint test",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "stub_tool",
+				Description: "Tool with empty entrypoint",
+				Entrypoint:  "",
+				Auth:        &manifest.Auth{Type: "none"},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+}
+
+// mcpManifestMultipleToolsEntrypoint returns a manifest with two tools that
+// have different entrypoints, used to verify each tool file uses its own.
+func mcpManifestMultipleToolsEntrypoint() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "multi-ep-server",
+			Version:     "1.0.0",
+			Description: "Multiple entrypoints",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "tool_alpha",
+				Description: "Alpha tool",
+				Entrypoint:  "/bin/alpha",
+				Auth:        &manifest.Auth{Type: "none"},
+			},
+			{
+				Name:        "tool_beta",
+				Description: "Beta tool",
+				Entrypoint:  "/bin/beta",
+				Auth:        &manifest.Auth{Type: "none"},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{
+				Target:    "typescript",
+				Transport: []string{"stdio"},
+			},
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC3: MCP generator emits entrypoint execution
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_AC3_ExecFileImported(t *testing.T) {
+	// All generated tool files must import execFile from node:child_process.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Contains(t, content, `from "node:child_process"`,
+		"tool file must import from node:child_process")
+	assert.Contains(t, content, "execFile",
+		"tool file must import execFile")
+}
+
+func TestTSMCP_AC3_PromisifyImported(t *testing.T) {
+	// Generated tool files must import promisify from node:util.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Contains(t, content, `from "node:util"`,
+		"tool file must import from node:util")
+	assert.Contains(t, content, "promisify",
+		"tool file must import promisify")
+}
+
+func TestTSMCP_AC3_ExecFilePromisified(t *testing.T) {
+	// Generated tool files must promisify execFile for async/await usage.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// Must contain the promisify wrapper, e.g.:
+	// const execFile = promisify(execFileCb);
+	assert.Regexp(t, `const execFile\s*=\s*promisify\(`, content,
+		"tool file must promisify execFile")
+}
+
+func TestTSMCP_AC3_EntrypointUsed_NotTODO(t *testing.T) {
+	// The generated tool file must NOT contain a TODO comment as a placeholder
+	// for tool logic. It must actually call execFile.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.NotContains(t, content, "// TODO: implement",
+		"tool file must not contain TODO placeholder for tool logic")
+	assert.Contains(t, content, "await execFile(",
+		"tool file must call execFile with await")
+}
+
+func TestTSMCP_AC3_EntrypointInExecFile(t *testing.T) {
+	// The execFile call must use the tool's manifest entrypoint path.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Contains(t, content, `"/usr/local/bin/run-job"`,
+		"execFile must reference the tool's entrypoint path from the manifest")
+}
+
+func TestTSMCP_AC3_EntrypointFromManifest_TableDriven(t *testing.T) {
+	// Different entrypoint values must appear in the generated execFile call.
+	tests := []struct {
+		name       string
+		entrypoint string
+		wantInCode string
+	}{
+		{
+			name:       "absolute path",
+			entrypoint: "/usr/bin/mytool",
+			wantInCode: `"/usr/bin/mytool"`,
+		},
+		{
+			name:       "relative path",
+			entrypoint: "./tools/run.sh",
+			wantInCode: `"./tools/run.sh"`,
+		},
+		{
+			name:       "bare command",
+			entrypoint: "python3",
+			wantInCode: `"python3"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name: "ep-test", Version: "1.0.0", Description: "test",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:        "test_tool",
+						Description: "Test tool",
+						Entrypoint:  tc.entrypoint,
+						Auth:        &manifest.Auth{Type: "none"},
+					},
+				},
+				Generate: manifest.Generate{
+					MCP: manifest.MCPConfig{Target: "typescript", Transport: []string{"stdio"}},
+				},
+			}
+			files := generateTSMCP(t, m)
+			content := fileContent(t, files, "src/tools/test_tool.ts")
+
+			assert.Contains(t, content, tc.wantInCode,
+				"execFile must use entrypoint %q from the manifest", tc.entrypoint)
+			assert.Contains(t, content, "await execFile(",
+				"tool file must call execFile")
+		})
+	}
+}
+
+func TestTSMCP_AC3_EmptyEntrypoint_ProducesGuard(t *testing.T) {
+	// A tool with entrypoint: "" must produce a runtime guard that throws
+	// an error mentioning "entrypoint not configured".
+	m := mcpManifestEmptyEntrypoint()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/stub_tool.ts")
+
+	assert.Contains(t, content, "entrypoint not configured",
+		"empty entrypoint must produce a guard error string")
+	assert.Contains(t, content, "stub_tool",
+		"guard error must mention the tool name")
+}
+
+func TestTSMCP_AC3_EmptyEntrypoint_GuardBlocksExecution(t *testing.T) {
+	// The guard for empty entrypoint must appear BEFORE any execFile call,
+	// so execution is blocked before trying to spawn a child process.
+	m := mcpManifestEmptyEntrypoint()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/stub_tool.ts")
+
+	guardIdx := strings.Index(content, "entrypoint not configured")
+	require.NotEqual(t, -1, guardIdx,
+		"must contain entrypoint guard")
+
+	execIdx := strings.Index(content, "await execFile(")
+	if execIdx != -1 {
+		assert.Less(t, guardIdx, execIdx,
+			"entrypoint guard must appear before execFile call")
+	}
+	// If no execFile is present at all, the guard still must be there
+	// (the guard itself blocks execution, which is valid)
+}
+
+func TestTSMCP_AC3_EntrypointEscaped_Quotes(t *testing.T) {
+	// Entrypoint values with double quotes must be escaped in the generated
+	// TypeScript string literal (constitution 25a).
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name: "esc-test", Version: "1.0.0", Description: "test",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "esc_tool",
+				Description: "Escape test tool",
+				Entrypoint:  `/opt/my "tool"`,
+				Auth:        &manifest.Auth{Type: "none"},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{Target: "typescript", Transport: []string{"stdio"}},
+		},
+	}
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/esc_tool.ts")
+
+	// The raw double quotes must be escaped
+	assert.NotContains(t, content, `/opt/my "tool"`,
+		"raw double quotes must not appear in generated string literal")
+	assert.Contains(t, content, `/opt/my \"tool\"`,
+		"entrypoint with quotes must be escaped via esc function")
+}
+
+func TestTSMCP_AC3_EntrypointEscaped_Backslash(t *testing.T) {
+	// Entrypoint values with backslashes must be escaped (constitution 25a).
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name: "bs-test", Version: "1.0.0", Description: "test",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "bs_tool",
+				Description: "Backslash test tool",
+				Entrypoint:  `C:\Program Files\tool.exe`,
+				Auth:        &manifest.Auth{Type: "none"},
+			},
+		},
+		Generate: manifest.Generate{
+			MCP: manifest.MCPConfig{Target: "typescript", Transport: []string{"stdio"}},
+		},
+	}
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/bs_tool.ts")
+
+	// Raw backslash must be escaped to double-backslash in TS string literal
+	assert.Contains(t, content, `C:\\Program Files\\tool.exe`,
+		"entrypoint backslashes must be escaped")
+}
+
+func TestTSMCP_AC3_TextOutput_StdoutAsText(t *testing.T) {
+	// Text output tools must return { type: "text", text: stdout } from
+	// the execFile result, NOT a hardcoded placeholder string.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// Must NOT contain hardcoded placeholder text return
+	assert.NotContains(t, content, `text: "run_job executed"`,
+		"text tools must not return hardcoded placeholder text")
+
+	// Must contain stdout from execFile used in the return
+	assert.Regexp(t, `type:\s*"text"`, content,
+		"text tool must return content with type 'text'")
+	// The stdout variable from execFile must be in the return
+	assert.Contains(t, content, "stdout",
+		"text tool must reference stdout from execFile result")
+}
+
+func TestTSMCP_AC3_BinaryOutput_BufferEncoding(t *testing.T) {
+	// Binary output tools must call execFile with { encoding: "buffer" }
+	// to receive raw bytes instead of a string.
+	m := mcpManifestEntrypointBinaryOutput()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/render_image.ts")
+
+	assert.Contains(t, content, `encoding: "buffer"`,
+		"binary tool must call execFile with encoding: buffer option")
+	assert.NotContains(t, content, `const stdout = ""`,
+		"binary tool must not use empty string placeholder for stdout")
+}
+
+func TestTSMCP_AC3_BinaryOutput_Base64(t *testing.T) {
+	// Binary output tools must base64 encode the stdout Buffer from execFile.
+	m := mcpManifestEntrypointBinaryOutput()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/render_image.ts")
+
+	// Must call execFile to get actual stdout, not use a hardcoded empty string
+	assert.Contains(t, content, "await execFile(",
+		"binary tool must call execFile to get stdout")
+	assert.NotContains(t, content, `const stdout = ""`,
+		"binary tool must not use empty string placeholder for stdout")
+
+	// The stdout from execFile (as Buffer) must be base64 encoded
+	assert.Contains(t, content, `.toString("base64")`,
+		"binary tool must base64 encode stdout buffer")
+	// Must still contain the image return structure
+	assert.Contains(t, content, "base64Data",
+		"binary tool must use base64Data in return")
+}
+
+func TestTSMCP_AC3_MultipleTools_EachUsesOwnEntrypoint(t *testing.T) {
+	// When multiple tools exist, each generated file must reference its own
+	// entrypoint, not share one or use the wrong one.
+	m := mcpManifestMultipleToolsEntrypoint()
+	files := generateTSMCP(t, m)
+
+	alphaContent := fileContent(t, files, "src/tools/tool_alpha.ts")
+	betaContent := fileContent(t, files, "src/tools/tool_beta.ts")
+
+	// Alpha must use /bin/alpha
+	assert.Contains(t, alphaContent, `"/bin/alpha"`,
+		"tool_alpha must use its own entrypoint /bin/alpha")
+	assert.NotContains(t, alphaContent, `"/bin/beta"`,
+		"tool_alpha must NOT reference tool_beta's entrypoint")
+
+	// Beta must use /bin/beta
+	assert.Contains(t, betaContent, `"/bin/beta"`,
+		"tool_beta must use its own entrypoint /bin/beta")
+	assert.NotContains(t, betaContent, `"/bin/alpha"`,
+		"tool_beta must NOT reference tool_alpha's entrypoint")
+}
+
+// ---------------------------------------------------------------------------
+// AC4: MCP generator builds args in runner convention order
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_AC4_ArgsArrayExists(t *testing.T) {
+	// The generated handler must declare a typed args array.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Regexp(t, `const args:\s*string\[\]\s*=\s*\[\]`, content,
+		"handler must declare 'const args: string[] = []'")
+}
+
+func TestTSMCP_AC4_PositionalArgsFirst(t *testing.T) {
+	// Positional args must appear before any flags in the args array.
+	// The generated code must push positional args first, then flags.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// Positional arg push must come before any --flag push
+	jobNameIdx := strings.Index(content, "job_name")
+	require.NotEqual(t, -1, jobNameIdx,
+		"must reference positional arg job_name")
+
+	// Find the first --flag reference (e.g., --verbose)
+	firstFlagIdx := strings.Index(content, `"--verbose"`)
+	if firstFlagIdx == -1 {
+		firstFlagIdx = strings.Index(content, `"--retries"`)
+	}
+	require.NotEqual(t, -1, firstFlagIdx,
+		"must reference at least one flag with -- prefix")
+
+	// Find the push of the positional arg — it should have String() wrapping
+	positionalPushIdx := strings.Index(content, "String(input.job_name)")
+	require.NotEqual(t, -1, positionalPushIdx,
+		"must push positional arg with String() conversion")
+
+	assert.Less(t, positionalPushIdx, firstFlagIdx,
+		"positional args must be pushed before any flags")
+}
+
+func TestTSMCP_AC4_PositionalArgs_Stringified(t *testing.T) {
+	// Positional args must be pushed as String(value) to ensure correct type.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// String arg: String(input.job_name)
+	assert.Contains(t, content, "String(input.job_name)",
+		"string positional arg must use String(input.job_name)")
+
+	// Int arg (priority): String(input.priority) — numbers must be stringified
+	assert.Contains(t, content, "String(input.priority)",
+		"int positional arg must use String(input.priority)")
+}
+
+func TestTSMCP_AC4_StringFlag_NotUndefined(t *testing.T) {
+	// String flags must be guarded with !== undefined before pushing.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Regexp(t, `input\.label\s*!==\s*undefined`, content,
+		"string flag 'label' must be guarded with !== undefined")
+	assert.Contains(t, content, `"--label"`,
+		"string flag must push --label flag name")
+	assert.Contains(t, content, "String(input.label)",
+		"string flag must push String(input.label) as value")
+}
+
+func TestTSMCP_AC4_BoolFlag_OnlyWhenTrue(t *testing.T) {
+	// Boolean flags push only the flag name (no value) when true.
+	// Must use === true guard, not just truthiness check.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Regexp(t, `input\.verbose\s*===\s*true`, content,
+		"bool flag 'verbose' must use === true guard")
+	assert.Contains(t, content, `"--verbose"`,
+		"bool flag must push --verbose flag name")
+
+	// Boolean flags must NOT push a value after the flag name
+	// Find the verbose block and ensure it doesn't push a second arg
+	verboseIdx := strings.Index(content, `"--verbose"`)
+	require.NotEqual(t, -1, verboseIdx)
+	// Get a reasonable window after the flag push
+	window := content[verboseIdx:min(verboseIdx+100, len(content))]
+	assert.NotContains(t, window, "String(input.verbose)",
+		"bool flag must NOT push a value — only the flag name")
+}
+
+func TestTSMCP_AC4_NumberFlag_Stringified(t *testing.T) {
+	// Number flags must be pushed with String() conversion.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Contains(t, content, `"--retries"`,
+		"number flag must push --retries flag name")
+	assert.Contains(t, content, "String(input.retries)",
+		"number flag must push String(input.retries) as value")
+
+	// Float flag too
+	assert.Contains(t, content, `"--threshold"`,
+		"float flag must push --threshold flag name")
+	assert.Contains(t, content, "String(input.threshold)",
+		"float flag must push String(input.threshold) as value")
+}
+
+func TestTSMCP_AC4_ArrayFlag_RepeatedPairs(t *testing.T) {
+	// Array flags emit a separate --flag value pair for each element.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// Must contain a for loop over the array elements
+	assert.Regexp(t, `for\s*\(`, content,
+		"array flag must use a for loop to iterate elements")
+	assert.Contains(t, content, "input.tags",
+		"array flag must reference input.tags")
+	assert.Contains(t, content, `"--tags"`,
+		"array flag must push --tags for each element")
+}
+
+func TestTSMCP_AC4_ObjectFlag_JsonStringify(t *testing.T) {
+	// Object flags must be serialized with JSON.stringify.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Contains(t, content, `"--config"`,
+		"object flag must push --config flag name")
+	assert.Contains(t, content, "JSON.stringify(input.config)",
+		"object flag must use JSON.stringify for value")
+}
+
+func TestTSMCP_AC4_TokenViaCliFlag(t *testing.T) {
+	// Auth token must be passed to the entrypoint child process via CLI flag,
+	// using the TokenFlag value from the manifest (constitution rule 24).
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Contains(t, content, `"--api-key"`,
+		"token must be passed using the manifest TokenFlag value")
+	assert.Contains(t, content, "envToken",
+		"token must be passed via the envToken variable, not hardcoded")
+	// Must push as args.push("--api-key", envToken)
+	assert.Regexp(t, `args\.push\([^)]*"--api-key"[^)]*envToken`, content,
+		"token must be pushed as args.push(\"--api-key\", envToken)")
+}
+
+func TestTSMCP_AC4_TokenLastInArgs(t *testing.T) {
+	// Token flag must appear AFTER all other args and flags in the args array.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// Find the last flag push (--config is the last manifest flag)
+	configIdx := strings.Index(content, `"--config"`)
+	require.NotEqual(t, -1, configIdx,
+		"must contain --config flag")
+
+	// Find the token flag push
+	tokenIdx := strings.Index(content, `"--api-key"`)
+	require.NotEqual(t, -1, tokenIdx,
+		"must contain --api-key token flag")
+
+	assert.Greater(t, tokenIdx, configIdx,
+		"token flag --api-key must appear after all manifest flags")
+}
+
+func TestTSMCP_AC4_NoAuthTool_NoTokenInArgs(t *testing.T) {
+	// A tool with no auth (or auth:none) must not have any token-related
+	// args building code, but MUST still call execFile with its entrypoint.
+	m := mcpManifestEntrypointNoAuth()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/list_files.ts")
+
+	// Must still call execFile (this is entrypoint wiring, not just auth)
+	assert.Contains(t, content, "await execFile(",
+		"no-auth tool must still call execFile for its entrypoint")
+	assert.Contains(t, content, `"/usr/bin/ls"`,
+		"no-auth tool must use its manifest entrypoint in execFile call")
+
+	// Must NOT have token-related code
+	assert.NotContains(t, content, "envToken",
+		"no-auth tool must not reference envToken")
+	assert.NotContains(t, content, "JOB_TOKEN",
+		"no-auth tool must not reference any token env var")
+	assert.NotContains(t, content, "--api-key",
+		"no-auth tool must not push any token flag")
+}
+
+func TestTSMCP_AC4_FlagsInDefinitionOrder(t *testing.T) {
+	// Flags must appear in the generated args-building code in the same order
+	// as they are defined in the manifest. This ensures predictable argument
+	// ordering for child processes.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// The manifest defines flags in this order:
+	// verbose, retries, threshold, label, tags, config
+	verboseIdx := strings.Index(content, `"--verbose"`)
+	retriesIdx := strings.Index(content, `"--retries"`)
+	thresholdIdx := strings.Index(content, `"--threshold"`)
+	labelIdx := strings.Index(content, `"--label"`)
+	tagsIdx := strings.Index(content, `"--tags"`)
+	configIdx := strings.Index(content, `"--config"`)
+
+	require.NotEqual(t, -1, verboseIdx, "must contain --verbose")
+	require.NotEqual(t, -1, retriesIdx, "must contain --retries")
+	require.NotEqual(t, -1, thresholdIdx, "must contain --threshold")
+	require.NotEqual(t, -1, labelIdx, "must contain --label")
+	require.NotEqual(t, -1, tagsIdx, "must contain --tags")
+	require.NotEqual(t, -1, configIdx, "must contain --config")
+
+	assert.Less(t, verboseIdx, retriesIdx,
+		"--verbose must appear before --retries")
+	assert.Less(t, retriesIdx, thresholdIdx,
+		"--retries must appear before --threshold")
+	assert.Less(t, thresholdIdx, labelIdx,
+		"--threshold must appear before --label")
+	assert.Less(t, labelIdx, tagsIdx,
+		"--label must appear before --tags")
+	assert.Less(t, tagsIdx, configIdx,
+		"--tags must appear before --config")
+}
+
+// ---------------------------------------------------------------------------
+// AC6: Security — no token leakage
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_AC6_TokenReadFromEnv(t *testing.T) {
+	// The MCP server must read the token from the environment using
+	// process.env["TOKEN_ENV_NAME"] and then pass it to the child process
+	// via CLI flag args (constitution rule 24).
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	assert.Contains(t, content, `process.env["JOB_TOKEN"]`,
+		"token must be read from process.env with the correct env var name")
+	// The envToken variable must be used in args.push for the child process
+	assert.Regexp(t, `args\.push\([^)]*"--api-key"[^)]*envToken`, content,
+		"envToken from process.env must be forwarded via args.push to child process")
+}
+
+func TestTSMCP_AC6_TokenNotInChildEnv(t *testing.T) {
+	// Tokens must be passed via CLI flag to child processes, NEVER as
+	// environment variables on the child. The execFile call must not set
+	// env on the options object with token values (constitution rule 24).
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// Must have execFile to be meaningful
+	assert.Contains(t, content, "await execFile(",
+		"must call execFile to verify token is not in child env")
+
+	// execFile options must not include env with token
+	assert.NotRegexp(t, `execFile\([^)]*\{[^}]*env:`, content,
+		"execFile must not pass env option with token to child process")
+}
+
+func TestTSMCP_AC6_NoTokenLiteralInExecArgs(t *testing.T) {
+	// The token must be passed via a variable (envToken), never as a string
+	// literal in the execFile arguments. This ensures tokens aren't hardcoded.
+	m := mcpManifestEntrypointWiring()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/run_job.ts")
+
+	// Must have execFile to be meaningful
+	require.Contains(t, content, "await execFile(",
+		"must call execFile to verify token is not literal in args")
+
+	// The args array must reference envToken variable, not a literal
+	assert.Regexp(t, `args\.push\([^)]*"--api-key"[^)]*envToken`, content,
+		"token must be passed as envToken variable in args.push")
+
+	// The env var name should not appear as a string literal pushed to args
+	execCallIdx := strings.Index(content, "await execFile(")
+	afterExec := content[execCallIdx:]
+	assert.NotContains(t, afterExec, `args.push("JOB_TOKEN"`,
+		"token env var name must not appear as a literal in args push")
+}
+
+// ---------------------------------------------------------------------------
+// AC3/AC4 cross-cutting: entrypoint and token flag flow through to output
+// ---------------------------------------------------------------------------
+
+func TestTSMCP_AC3_EntrypointFlowsToOutput(t *testing.T) {
+	// The tool's manifest entrypoint must flow through to the generated
+	// TypeScript output. This is an end-to-end check that the data pipeline
+	// (manifest -> tsToolData -> template) preserves the entrypoint value.
+	// Each test case uses a distinct entrypoint to prevent a hardcoded return.
+	tests := []struct {
+		name       string
+		entrypoint string
+	}{
+		{name: "absolute_path", entrypoint: "/usr/local/bin/run-job"},
+		{name: "relative_dotslash", entrypoint: "./my-tool.sh"},
+		{name: "bare_command", entrypoint: "node"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name: "ep-flow-test", Version: "1.0.0", Description: "test",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:        "flow_tool",
+						Description: "Flow test",
+						Entrypoint:  tc.entrypoint,
+						Auth:        &manifest.Auth{Type: "none"},
+					},
+				},
+				Generate: manifest.Generate{
+					MCP: manifest.MCPConfig{Target: "typescript", Transport: []string{"stdio"}},
+				},
+			}
+			files := generateTSMCP(t, m)
+			content := fileContent(t, files, "src/tools/flow_tool.ts")
+
+			// The entrypoint must appear as a string literal in the execFile call
+			assert.Contains(t, content, tc.entrypoint,
+				"entrypoint %q must flow through to generated output", tc.entrypoint)
+		})
+	}
+}
+
+func TestTSMCP_AC3_TokenFlagFlowsToOutput(t *testing.T) {
+	// The auth TokenFlag (with -- prefix) must flow through to the generated
+	// TypeScript output, appearing in the args.push() call for the token.
+	tests := []struct {
+		name      string
+		tokenFlag string
+	}{
+		{name: "api-key", tokenFlag: "--api-key"},
+		{name: "token", tokenFlag: "--token"},
+		{name: "auth-header", tokenFlag: "--auth-header"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name: "tf-flow-test", Version: "1.0.0", Description: "test",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:        "tf_tool",
+						Description: "Token flag flow test",
+						Entrypoint:  "/bin/tool",
+						Auth: &manifest.Auth{
+							Type:      "token",
+							TokenEnv:  "MY_TOKEN",
+							TokenFlag: tc.tokenFlag,
+						},
+					},
+				},
+				Generate: manifest.Generate{
+					MCP: manifest.MCPConfig{Target: "typescript", Transport: []string{"stdio"}},
+				},
+			}
+			files := generateTSMCP(t, m)
+			content := fileContent(t, files, "src/tools/tf_tool.ts")
+
+			assert.Contains(t, content, tc.tokenFlag,
+				"tokenFlag %q must flow through to generated output", tc.tokenFlag)
+		})
+	}
+}
