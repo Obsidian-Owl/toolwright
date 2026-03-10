@@ -207,7 +207,8 @@ type flagData struct {
 
 type argData struct {
 	Name        string // original arg name used in string literals
-	GoName      string // sanitized Go identifier
+	GoName      string // sanitized Go identifier (camelCase, lowercase first)
+	GoNameCap   string // GoName with first letter uppercased (PascalCase)
 	GoType      string
 	Required    bool
 	Description string
@@ -224,10 +225,11 @@ type toolGoData struct {
 	AuthType               string
 	TokenEnv               string
 	TokenFlag              string
-	HasNonStringArgs       bool // true if any arg needs strconv parsing
-	HasNonStringArrayFlags bool // true if any flag is a non-string array type needing strconv
-	HasObjectFlags         bool // true if any flag is type "object" or "object[]"
-	IsBinaryOutput         bool // true if tool output format is "binary"
+	HasNonStringArgs       bool   // true if any arg needs strconv parsing
+	HasNonStringArrayFlags bool   // true if any flag is a non-string array type needing strconv
+	HasObjectFlags         bool   // true if any flag is type "object" or "object[]"
+	IsBinaryOutput         bool   // true if tool output format is "binary"
+	Entrypoint             string // executable path from manifest tool.Entrypoint
 }
 
 type goModData struct {
@@ -317,9 +319,15 @@ func toolSummaries(m manifest.Toolkit) []toolSummary {
 func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) toolGoData {
 	args := make([]argData, len(tool.Args))
 	for i, a := range tool.Args {
+		gn := goIdentifier(a.Name)
+		gnCap := gn
+		if len(gn) > 0 {
+			gnCap = strings.ToUpper(gn[:1]) + gn[1:]
+		}
 		args[i] = argData{
 			Name:        a.Name,
-			GoName:      goIdentifier(a.Name),
+			GoName:      gn,
+			GoNameCap:   gnCap,
 			GoType:      goType(a.Type),
 			Required:    a.Required,
 			Description: a.Description,
@@ -413,6 +421,7 @@ func buildToolData(m manifest.Toolkit, tool manifest.Tool, auth manifest.Auth) t
 		HasNonStringArrayFlags: hasNonStringArrayFlags,
 		HasObjectFlags:         hasObjectFlags,
 		IsBinaryOutput:         tool.Output.Format == "binary",
+		Entrypoint:             tool.Entrypoint,
 	}
 }
 
@@ -694,6 +703,7 @@ import (
 {{- $authType := .AuthType}}
 {{- $tokenEnv := .TokenEnv}}
 {{- $tokenFlag := .TokenFlag}}
+{{- $entrypoint := .Entrypoint}}
 var (
 {{- range .Flags}}
 {{- if .IsArray}}
@@ -740,90 +750,22 @@ var {{.GoName}}Cmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 {{- range $i, $a := .Args}}
 {{- if eq $a.GoType "string"}}
-		arg{{$a.GoName}} := args[{{$i}}] // {{$a.GoType}}
+		arg{{$a.GoNameCap}} := args[{{$i}}] // {{$a.GoType}}
 {{- else if eq $a.GoType "int"}}
-		arg{{$a.GoName}}, err := strconv.Atoi(args[{{$i}}]) // {{$a.GoType}}
+		arg{{$a.GoNameCap}}, err := strconv.Atoi(args[{{$i}}]) // {{$a.GoType}}
 		if err != nil {
 			return fmt.Errorf("invalid value %q for argument {{$a.Name}}: %w", args[{{$i}}], err)
 		}
 {{- else if eq $a.GoType "float64"}}
-		arg{{$a.GoName}}, err := strconv.ParseFloat(args[{{$i}}], 64) // {{$a.GoType}}
+		arg{{$a.GoNameCap}}, err := strconv.ParseFloat(args[{{$i}}], 64) // {{$a.GoType}}
 		if err != nil {
 			return fmt.Errorf("invalid value %q for argument {{$a.Name}}: %w", args[{{$i}}], err)
 		}
 {{- else if eq $a.GoType "bool"}}
-		arg{{$a.GoName}}, err := strconv.ParseBool(args[{{$i}}]) // {{$a.GoType}}
+		arg{{$a.GoNameCap}}, err := strconv.ParseBool(args[{{$i}}]) // {{$a.GoType}}
 		if err != nil {
 			return fmt.Errorf("invalid value %q for argument {{$a.Name}}: %w", args[{{$i}}], err)
 		}
-{{- end}}
-		_ = arg{{$a.GoName}}
-{{- end}}
-{{- range .Flags}}
-{{- if .IsArray}}
-{{- if eq .ArrayBase "int"}}
-		parsed{{.GoName}} := make([]int, len({{$goName}}Flag{{.GoName}}))
-		for i, s := range {{$goName}}Flag{{.GoName}} {
-			v, err := strconv.Atoi(s)
-			if err != nil {
-				return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid int", s)
-			}
-			parsed{{.GoName}}[i] = v
-		}
-		_ = parsed{{.GoName}}
-{{- else if eq .ArrayBase "float"}}
-		parsed{{.GoName}} := make([]float64, len({{$goName}}Flag{{.GoName}}))
-		for i, s := range {{$goName}}Flag{{.GoName}} {
-			v, err := strconv.ParseFloat(s, 64)
-			if err != nil {
-				return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid float", s)
-			}
-			parsed{{.GoName}}[i] = v
-		}
-		_ = parsed{{.GoName}}
-{{- else if eq .ArrayBase "bool"}}
-		parsed{{.GoName}} := make([]bool, len({{$goName}}Flag{{.GoName}}))
-		for i, s := range {{$goName}}Flag{{.GoName}} {
-			v, err := strconv.ParseBool(s)
-			if err != nil {
-				return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid bool", s)
-			}
-			parsed{{.GoName}}[i] = v
-		}
-		_ = parsed{{.GoName}}
-{{- end}}
-{{- end}}
-{{- end}}
-{{- range .Flags}}
-{{- if .IsObject}}
-{{- if .IsObjectArray}}
-		var parsed{{.GoName}} []map[string]any
-		if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
-			return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
-		}
-{{- if .HasItemSchema}}
-		for _idx, _elem := range parsed{{.GoName}} {
-			for _, _field := range []string{ {{joinQuoted .ItemSchemaProperties}} } {
-				if _, ok := _elem[_field]; !ok {
-					return fmt.Errorf("--{{.Name}}[%d]: required field %q missing from JSON object", _idx, _field)
-				}
-			}
-		}
-{{- end}}
-{{- else}}
-		var parsed{{.GoName}} map[string]any
-		if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
-			return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
-		}
-{{- if .HasItemSchema}}
-		for _, _field := range []string{ {{joinQuoted .ItemSchemaProperties}} } {
-			if _, ok := parsed{{.GoName}}[_field]; !ok {
-				return fmt.Errorf("--{{.Name}}: required field %q missing from JSON object", _field)
-			}
-		}
-{{- end}}
-{{- end}}
-		_ = parsed{{.GoName}}
 {{- end}}
 {{- end}}
 {{- if $hasAuth}}
@@ -835,19 +777,130 @@ var {{.GoName}}Cmd = &cobra.Command{
 		if token == "" {
 			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag | esc}}")
 		}
-		_ = token // passed to the entrypoint via environment
 {{- end}}
+		if "{{$entrypoint | esc}}" == "" {
+			return fmt.Errorf("{{$toolName}}: entrypoint not configured")
+		}
+		var cliArgs []string
+{{- range $i, $a := .Args}}
+{{- if eq $a.GoType "string"}}
+		cliArgs = append(cliArgs, arg{{$a.GoNameCap}})
+{{- else if eq $a.GoType "int"}}
+		cliArgs = append(cliArgs, fmt.Sprintf("%d", arg{{$a.GoNameCap}}))
+{{- else if eq $a.GoType "float64"}}
+		cliArgs = append(cliArgs, fmt.Sprintf("%g", arg{{$a.GoNameCap}}))
+{{- else if eq $a.GoType "bool"}}
+		cliArgs = append(cliArgs, strconv.FormatBool(arg{{$a.GoNameCap}}))
+{{- end}}
+{{- end}}
+{{- range .Flags}}
+{{- if .IsArray}}
+{{- if eq .ArrayBase "string"}}
+		for _, v := range {{$goName}}Flag{{.GoName}} {
+			cliArgs = append(cliArgs, "--{{.Name}}", v)
+		}
+{{- else if eq .ArrayBase "int"}}
+		{
+			parsed{{.GoName}} := make([]int, len({{$goName}}Flag{{.GoName}}))
+			for i, s := range {{$goName}}Flag{{.GoName}} {
+				v, err := strconv.Atoi(s)
+				if err != nil {
+					return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid int", s)
+				}
+				parsed{{.GoName}}[i] = v
+			}
+			for _, v := range parsed{{.GoName}} {
+				cliArgs = append(cliArgs, "--{{.Name}}", strconv.Itoa(v))
+			}
+		}
+{{- else if eq .ArrayBase "float"}}
+		{
+			parsed{{.GoName}} := make([]float64, len({{$goName}}Flag{{.GoName}}))
+			for i, s := range {{$goName}}Flag{{.GoName}} {
+				v, err := strconv.ParseFloat(s, 64)
+				if err != nil {
+					return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid float", s)
+				}
+				parsed{{.GoName}}[i] = v
+			}
+			for _, v := range parsed{{.GoName}} {
+				cliArgs = append(cliArgs, "--{{.Name}}", fmt.Sprintf("%g", v))
+			}
+		}
+{{- else if eq .ArrayBase "bool"}}
+		{
+			parsed{{.GoName}} := make([]bool, len({{$goName}}Flag{{.GoName}}))
+			for i, s := range {{$goName}}Flag{{.GoName}} {
+				v, err := strconv.ParseBool(s)
+				if err != nil {
+					return fmt.Errorf("invalid value %q for element of --{{.Name}}: not a valid bool", s)
+				}
+				parsed{{.GoName}}[i] = v
+			}
+			for _, v := range parsed{{.GoName}} {
+				cliArgs = append(cliArgs, "--{{.Name}}", strconv.FormatBool(v))
+			}
+		}
+{{- end}}
+{{- else if .IsObject}}
+		if {{$goName}}Flag{{.GoName}} != "" {
+{{- if .IsObjectArray}}
+			var parsed{{.GoName}} []map[string]any
+			if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
+				return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
+			}
+{{- if .HasItemSchema}}
+			for _idx, _elem := range parsed{{.GoName}} {
+				for _, _field := range []string{ {{joinQuoted .ItemSchemaProperties}} } {
+					if _, ok := _elem[_field]; !ok {
+						return fmt.Errorf("--{{.Name}}[%d]: required field %q missing from JSON object", _idx, _field)
+					}
+				}
+			}
+{{- end}}
+{{- else}}
+			var parsed{{.GoName}} map[string]any
+			if err := json.Unmarshal([]byte({{$goName}}Flag{{.GoName}}), &parsed{{.GoName}}); err != nil {
+				return fmt.Errorf("invalid JSON for --{{.Name}}: %w", err)
+			}
+{{- if .HasItemSchema}}
+			for _, _field := range []string{ {{joinQuoted .ItemSchemaProperties}} } {
+				if _, ok := parsed{{.GoName}}[_field]; !ok {
+					return fmt.Errorf("--{{.Name}}: required field %q missing from JSON object", _field)
+				}
+			}
+{{- end}}
+{{- end}}
+			cliArgs = append(cliArgs, "--{{.Name}}", {{$goName}}Flag{{.GoName}})
+		}
+{{- else if eq .GoType "bool"}}
+		if {{$goName}}Flag{{.GoName}} {
+			cliArgs = append(cliArgs, "--{{.Name}}")
+		}
+{{- else if eq .GoType "string"}}
+		if {{$goName}}Flag{{.GoName}} != "" {
+			cliArgs = append(cliArgs, "--{{.Name}}", {{$goName}}Flag{{.GoName}})
+		}
+{{- else if eq .GoType "int"}}
+		cliArgs = append(cliArgs, "--{{.Name}}", fmt.Sprintf("%d", {{$goName}}Flag{{.GoName}}))
+{{- else if eq .GoType "float64"}}
+		cliArgs = append(cliArgs, "--{{.Name}}", fmt.Sprintf("%g", {{$goName}}Flag{{.GoName}}))
+{{- end}}
+{{- end}}
+{{- if $hasAuth}}
+		cliArgs = append(cliArgs, "--{{$tokenFlag | esc}}", token)
+{{- end}}
+		ctx := cmd.Context()
 {{- if .IsBinaryOutput}}
-		// Binary output: detect TTY and handle appropriately.
+		// Binary output handling
 		fi, statErr := os.Stdout.Stat()
 		isTTY := statErr == nil && (fi.Mode()&os.ModeCharDevice) != 0
 		if isTTY && {{$goName}}FlagOutput == "" {
 			return fmt.Errorf("binary output requires --output <file> or pipe")
 		}
-		c := exec.CommandContext(cmd.Context(), "echo", "running", "{{$toolName}}")
+		c := exec.CommandContext(ctx, "{{$entrypoint | esc}}", cliArgs...)
 		c.Stderr = os.Stderr
 		if {{$goName}}FlagOutput != "" {
-			// --output provided: capture stdout and write to file.
 			out, err := c.Output()
 			if err != nil {
 				return fmt.Errorf("{{$toolName}} failed: %w", err)
@@ -856,7 +909,6 @@ var {{.GoName}}Cmd = &cobra.Command{
 				return fmt.Errorf("writing output file: %w", err)
 			}
 		} else {
-			// No --output: stream directly to stdout (pipe mode).
 			c.Stdout = os.Stdout
 			if err := c.Run(); err != nil {
 				return fmt.Errorf("{{$toolName}} failed: %w", err)
@@ -864,7 +916,7 @@ var {{.GoName}}Cmd = &cobra.Command{
 		}
 {{- else}}
 		// Execute the tool entrypoint.
-		c := exec.CommandContext(cmd.Context(), "echo", "running", "{{$toolName}}")
+		c := exec.CommandContext(ctx, "{{$entrypoint | esc}}", cliArgs...)
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
