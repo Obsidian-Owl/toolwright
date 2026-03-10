@@ -2317,8 +2317,10 @@ func TestGoCLI_AC1_EntrypointInExecCommandContext(t *testing.T) {
 	files := generateCLI(t, manifestEntrypointWiring())
 	content := fileContent(t, files, "internal/commands/run-job.go")
 
-	assert.Regexp(t, `exec\.CommandContext\([^)]*"/usr/local/bin/run-job"`, content,
-		"entrypoint must be the executable argument to exec.CommandContext")
+	assert.Contains(t, content, `entrypoint := "/usr/local/bin/run-job"`,
+		"entrypoint must be assigned from the manifest value")
+	assert.Regexp(t, `exec\.CommandContext\([^,]+,\s*entrypoint\b`, content,
+		"exec.CommandContext must use the entrypoint variable")
 }
 
 func TestGoCLI_AC1_EntrypointFromManifest_TableDriven(t *testing.T) {
@@ -2381,10 +2383,10 @@ func TestGoCLI_AC1_BuildToolData_EntrypointPopulated(t *testing.T) {
 	files := generateCLI(t, m)
 	content := fileContent(t, files, "internal/commands/run-job.go")
 
-	// The entrypoint must appear in exec.CommandContext — this proves the
+	// The entrypoint must be assigned from the manifest — this proves the
 	// struct carried it through to the template.
-	assert.Regexp(t, `exec\.CommandContext\([^)]*"/usr/local/bin/run-job"`, content,
-		"buildToolData must populate Entrypoint so the template can interpolate it into exec.CommandContext")
+	assert.Contains(t, content, `entrypoint := "/usr/local/bin/run-job"`,
+		"buildToolData must populate Entrypoint so the template can assign it to a local variable")
 }
 
 func TestGoCLI_AC1_EmptyEntrypoint_ProducesGuard(t *testing.T) {
@@ -2751,9 +2753,9 @@ func TestGoCLI_AC2_CliArgsPassedToExecCommand(t *testing.T) {
 	content := fileContent(t, files, "internal/commands/run-job.go")
 
 	// exec.CommandContext takes (ctx, name, arg...) — the cliArgs must be
-	// spread into it.
-	assert.Regexp(t, `CommandContext\([^,]+,\s*"[^"]*"[^)]*cliArgs`, content,
-		"cliArgs must be passed to exec.CommandContext (e.g., cliArgs...)")
+	// spread via the entrypoint variable.
+	assert.Regexp(t, `CommandContext\([^,]+,\s*entrypoint[^)]*cliArgs`, content,
+		"cliArgs must be passed to exec.CommandContext via entrypoint variable (e.g., entrypoint, cliArgs...)")
 }
 
 func TestGoCLI_AC2_MultiplePositionalArgs_InOrder(t *testing.T) {

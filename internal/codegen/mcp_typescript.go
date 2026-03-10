@@ -683,9 +683,6 @@ const tsToolTmpl = `import { McpServer } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-{{- if .HasAuth}}
-import { validateRequest } from "../auth/middleware.js";
-{{- end}}
 
 const execFile = promisify(execFileCb);
 
@@ -724,7 +721,8 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
   }
 {{- end}}
   // Empty entrypoint guard
-  if (!"{{.Entrypoint | esc}}") {
+  const entrypoint = "{{.Entrypoint | esc}}";
+  if (!entrypoint) {
     throw new Error("{{.ToolName | esc}}: entrypoint not configured");
   }
   const args: string[] = [];
@@ -760,7 +758,7 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
 {{- end}}
   // Execute the entrypoint
 {{- if .IsBinaryOutput}}
-  const { stdout } = await execFile("{{.Entrypoint | esc}}", args, { encoding: "buffer" });
+  const { stdout } = await execFile(entrypoint, args, { encoding: "buffer" });
   const base64Data = Buffer.from(stdout).toString("base64");
 {{- if .IsImageMime}}
   return {
@@ -782,7 +780,7 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
   };
 {{- end}}
 {{- else}}
-  const { stdout } = await execFile("{{.Entrypoint | esc}}", args);
+  const { stdout } = await execFile(entrypoint, args);
   return {
     content: [{ type: "text", text: stdout }],
   };

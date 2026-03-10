@@ -778,7 +778,8 @@ var {{.GoName}}Cmd = &cobra.Command{
 			return fmt.Errorf("auth required: set {{$tokenEnv | esc}} or pass --{{$tokenFlag | esc}}")
 		}
 {{- end}}
-		if "{{$entrypoint | esc}}" == "" {
+		entrypoint := "{{$entrypoint | esc}}"
+		if entrypoint == "" {
 			return fmt.Errorf("{{$toolName}}: entrypoint not configured")
 		}
 		var cliArgs []string
@@ -898,7 +899,7 @@ var {{.GoName}}Cmd = &cobra.Command{
 		if isTTY && {{$goName}}FlagOutput == "" {
 			return fmt.Errorf("binary output requires --output <file> or pipe")
 		}
-		c := exec.CommandContext(ctx, "{{$entrypoint | esc}}", cliArgs...)
+		c := exec.CommandContext(ctx, entrypoint, cliArgs...)
 		c.Stderr = os.Stderr
 		if {{$goName}}FlagOutput != "" {
 			out, err := c.Output()
@@ -916,7 +917,7 @@ var {{.GoName}}Cmd = &cobra.Command{
 		}
 {{- else}}
 		// Execute the tool entrypoint.
-		c := exec.CommandContext(ctx, "{{$entrypoint | esc}}", cliArgs...)
+		c := exec.CommandContext(ctx, entrypoint, cliArgs...)
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
