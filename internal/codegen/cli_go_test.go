@@ -2251,3 +2251,766 @@ func TestGoCLI_Object_AC8_HasNonStringArrayFlags_NotSetForObjectArray(t *testing
 	assert.False(t, data.HasNonStringArrayFlags,
 		"object[] flag must not set HasNonStringArrayFlags (no strconv parsing)")
 }
+
+// ---------------------------------------------------------------------------
+// Task 1 — AC1: CLI generator emits entrypoint execution
+// ---------------------------------------------------------------------------
+
+// manifestEntrypointWiring returns a manifest exercising entrypoint + full
+// arg/flag coverage for Task 1 tests. The tool has positional args, multiple
+// flag types, and token auth — the kitchen sink for cliArgs construction.
+func manifestEntrypointWiring() manifest.Toolkit {
+	return manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:        "wire-toolkit",
+			Version:     "1.0.0",
+			Description: "Entrypoint wiring toolkit",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "run-job",
+				Description: "Run a job on the cluster",
+				Entrypoint:  "/usr/local/bin/run-job",
+				Auth: &manifest.Auth{
+					Type:      "token",
+					TokenEnv:  "JOB_TOKEN",
+					TokenFlag: "--api-key",
+				},
+				Args: []manifest.Arg{
+					{Name: "job-name", Type: "string", Required: true, Description: "Name of the job"},
+					{Name: "priority", Type: "int", Required: false, Description: "Job priority"},
+				},
+				Flags: []manifest.Flag{
+					{Name: "verbose", Type: "bool", Required: false, Default: false, Description: "Verbose output"},
+					{Name: "retries", Type: "int", Required: false, Default: 3, Description: "Number of retries"},
+					{Name: "threshold", Type: "float", Required: false, Default: 0.5, Description: "Score threshold"},
+					{Name: "label", Type: "string", Required: false, Description: "Job label"},
+					{Name: "tags", Type: "string[]", Required: false, Description: "Tags to apply"},
+					{Name: "counts", Type: "int[]", Required: false, Description: "Count list"},
+					{Name: "config", Type: "object", Required: false, Description: "Config object"},
+				},
+			},
+		},
+	}
+}
+
+func TestGoCLI_AC1_EntrypointUsed_NotEcho(t *testing.T) {
+	// The generated code must use the tool's manifest entrypoint as the
+	// executable in exec.CommandContext, NOT "echo".
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// Must contain the actual entrypoint path.
+	assert.Contains(t, content, "/usr/local/bin/run-job",
+		"generated code must use the tool's entrypoint path, not a stub")
+	// Must NOT use "echo" as the executable.
+	assert.NotContains(t, content, `"echo"`,
+		"generated code must not use \"echo\" as the executable — use the real entrypoint")
+}
+
+func TestGoCLI_AC1_EntrypointInExecCommandContext(t *testing.T) {
+	// Verify the entrypoint appears in the specific exec.CommandContext call,
+	// not just anywhere in the file. This catches a sloppy implementation
+	// that puts the entrypoint in a comment but still calls echo.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	assert.Contains(t, content, `entrypoint := "/usr/local/bin/run-job"`,
+		"entrypoint must be assigned from the manifest value")
+	assert.Regexp(t, `exec\.CommandContext\([^,]+,\s*entrypoint\b`, content,
+		"exec.CommandContext must use the entrypoint variable")
+}
+
+func TestGoCLI_AC1_EntrypointFromManifest_TableDriven(t *testing.T) {
+	// Table-driven (Constitution 9): verify different entrypoint values.
+	tests := []struct {
+		name       string
+		entrypoint string
+		want       string
+	}{
+		{
+			name:       "absolute path",
+			entrypoint: "/opt/tools/deploy",
+			want:       "/opt/tools/deploy",
+		},
+		{
+			name:       "relative path",
+			entrypoint: "./scripts/run.sh",
+			want:       "./scripts/run.sh",
+		},
+		{
+			name:       "bare command",
+			entrypoint: "python3",
+			want:       "python3",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := manifest.Toolkit{
+				APIVersion: "toolwright/v1",
+				Kind:       "Toolkit",
+				Metadata: manifest.Metadata{
+					Name:    "ep-test",
+					Version: "1.0.0",
+				},
+				Tools: []manifest.Tool{
+					{
+						Name:       "mytool",
+						Entrypoint: tc.entrypoint,
+						Auth:       &manifest.Auth{Type: "none"},
+					},
+				},
+			}
+			files := generateCLI(t, m)
+			content := fileContent(t, files, "internal/commands/mytool.go")
+			assert.Contains(t, content, tc.want,
+				"entrypoint %q must appear in generated code", tc.entrypoint)
+			assert.NotContains(t, content, `"echo"`,
+				"generated code must not use echo stub with entrypoint %q", tc.entrypoint)
+		})
+	}
+}
+
+func TestGoCLI_AC1_BuildToolData_EntrypointPopulated(t *testing.T) {
+	// The toolGoData struct must include an Entrypoint field populated from
+	// tool.Entrypoint. We verify via the generated output: if the entrypoint
+	// field is missing from the struct, the template cannot interpolate it
+	// and the generated code will not contain the entrypoint path.
+	m := manifestEntrypointWiring()
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The entrypoint must be assigned from the manifest — this proves the
+	// struct carried it through to the template.
+	assert.Contains(t, content, `entrypoint := "/usr/local/bin/run-job"`,
+		"buildToolData must populate Entrypoint so the template can assign it to a local variable")
+}
+
+func TestGoCLI_AC1_EmptyEntrypoint_ProducesGuard(t *testing.T) {
+	// A manifest with entrypoint: "" must generate a guard that returns
+	// an error at runtime rather than trying to exec "".
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "noep-toolkit",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "unconfigured",
+				Description: "Tool with empty entrypoint",
+				Entrypoint:  "",
+				Auth:        &manifest.Auth{Type: "none"},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/unconfigured.go")
+
+	// The generated RunE must contain a guard that checks for empty entrypoint.
+	assert.Contains(t, content, "entrypoint not configured",
+		"empty entrypoint must produce a guard error containing 'entrypoint not configured'")
+	assert.Contains(t, content, "unconfigured",
+		"guard error message must include the tool name 'unconfigured'")
+}
+
+func TestGoCLI_AC1_EmptyEntrypoint_GuardBlocksExecution(t *testing.T) {
+	// The guard must appear before exec.CommandContext so the tool never
+	// attempts to exec an empty string. Verify by checking that the guard
+	// string "entrypoint not configured" appears before "CommandContext"
+	// (or that CommandContext is absent for empty entrypoint tools).
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "noep2-toolkit",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "empty-ep",
+				Entrypoint: "",
+				Auth:       &manifest.Auth{Type: "none"},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/empty-ep.go")
+
+	guardIdx := strings.Index(content, "entrypoint not configured")
+	assert.NotEqual(t, -1, guardIdx,
+		"generated code must contain 'entrypoint not configured' guard")
+
+	// Either CommandContext is absent entirely (valid: the guard returns before
+	// reaching it) or it appears after the guard.
+	cmdIdx := strings.Index(content, "CommandContext")
+	if cmdIdx != -1 {
+		assert.Greater(t, cmdIdx, guardIdx,
+			"entrypoint guard must appear before CommandContext call")
+	}
+}
+
+func TestGoCLI_AC1_EntrypointEscaped_Quotes(t *testing.T) {
+	// AC6.4: Entrypoint paths with quotes must be safely escaped so the
+	// generated Go string literal is valid.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "esc-toolkit",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "quotetool",
+				Entrypoint: `/path/with "quotes"/run`,
+				Auth:       &manifest.Auth{Type: "none"},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/quotetool.go")
+
+	// The raw double-quote must be escaped as \" in the Go string literal.
+	assert.Contains(t, content, `\"quotes\"`,
+		"double quotes in entrypoint must be escaped as \\\" in generated Go literal")
+	// The raw path with unescaped quotes must NOT appear verbatim. If the
+	// implementation forgot to escape, the template would produce something
+	// like: CommandContext(..., "/path/with "quotes"/run") which is broken Go.
+	// We check that the full raw entrypoint path does not appear unescaped
+	// by looking for the sequence that would only exist without escaping.
+	assert.NotContains(t, content, `with "quotes"`,
+		"raw unescaped entrypoint path with bare quotes must not appear in generated code")
+}
+
+func TestGoCLI_AC1_EntrypointEscaped_Backslash(t *testing.T) {
+	// AC6.4: Entrypoint paths with backslashes (e.g., Windows paths) must
+	// be safely escaped.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "bs-toolkit",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "bstool",
+				Entrypoint: `C:\Program Files\tool\run.exe`,
+				Auth:       &manifest.Auth{Type: "none"},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/bstool.go")
+
+	// Backslashes must be doubled in the Go string literal.
+	assert.Contains(t, content, `C:\\Program Files\\tool\\run.exe`,
+		"backslashes in entrypoint must be escaped as \\\\ in generated Go literal")
+}
+
+// ---------------------------------------------------------------------------
+// Task 1 — AC2: CLI generator builds args in runner convention order
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_AC2_CliArgsSliceExists(t *testing.T) {
+	// The generated code must build a cliArgs (or equivalent) slice
+	// containing the tool's arguments and flags for the entrypoint.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	assert.Contains(t, content, "cliArgs",
+		"generated code must build a cliArgs slice for entrypoint arguments")
+}
+
+func TestGoCLI_AC2_PositionalArgsFirst(t *testing.T) {
+	// Positional args must appear before any flags in cliArgs.
+	// The generated code appends positional args first.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The positional arg names (job-name, priority) must appear in the args
+	// building section before any flag names (--verbose, --retries, etc.)
+	// We look for the first occurrence of a positional arg variable and the
+	// first flag append to verify ordering.
+	jobNameIdx := strings.Index(content, "argJobName")
+	assert.NotEqual(t, -1, jobNameIdx,
+		"generated code must reference positional arg variable 'argJobName'")
+
+	// The first flag in cliArgs must come after positional args.
+	flagAppendIdx := strings.Index(content, `"--verbose"`)
+	if flagAppendIdx != -1 {
+		assert.Greater(t, flagAppendIdx, jobNameIdx,
+			"flags in cliArgs must appear after positional args")
+	}
+}
+
+func TestGoCLI_AC2_FlagsInDefinitionOrder(t *testing.T) {
+	// Flags must appear in the order defined in the manifest.
+	// The manifest defines: verbose, retries, threshold, label, tags, counts, config.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// All flag names must appear in the cliArgs building section.
+	flagNames := []string{"--verbose", "--retries", "--threshold", "--label", "--tags", "--counts", "--config"}
+	lastIdx := -1
+	for _, flag := range flagNames {
+		idx := strings.Index(content, flag)
+		assert.NotEqual(t, -1, idx,
+			"generated code must reference flag %q in cliArgs construction", flag)
+		if lastIdx != -1 && idx != -1 {
+			assert.Greater(t, idx, lastIdx,
+				"flag %q must appear after previous flag in definition order", flag)
+		}
+		if idx != -1 {
+			lastIdx = idx
+		}
+	}
+}
+
+func TestGoCLI_AC2_BoolFlag_OnlyWhenTrue(t *testing.T) {
+	// Bool flags emit only --flag when true; omitted when false.
+	// The generated code must have a conditional: if boolVar { append --flag }.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The code must conditionally append the bool flag, not unconditionally.
+	// We verify that there's a conditional check around the verbose flag.
+	assert.Regexp(t, `if\s+.*[Vv]erbose`, content,
+		"bool flag 'verbose' must be conditionally appended (only when true)")
+	// Bool flags must NOT emit a value (--verbose true), just --verbose.
+	// Look for a pattern that appends --verbose without a following value.
+	assert.NotRegexp(t, `"--verbose".*"true"`, content,
+		"bool flag must emit only --verbose, not --verbose true")
+}
+
+func TestGoCLI_AC2_StringFlag_OmittedWhenEmpty(t *testing.T) {
+	// Empty/zero-value string flags are omitted from cliArgs.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// There must be a conditional check for the label flag (string type).
+	assert.Regexp(t, `if\s+.*[Ll]abel\s*!=\s*""`, content,
+		"string flag 'label' must be conditionally appended (omitted when empty)")
+}
+
+func TestGoCLI_AC2_IntFlag_Stringified(t *testing.T) {
+	// Int flags via fmt.Sprintf("%d", val). Zero-value int still passed.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The retries int flag must be stringified using Sprintf("%d", ...).
+	assert.Regexp(t, `Sprintf\("%d".*[Rr]etries`, content,
+		"int flag 'retries' must be stringified via fmt.Sprintf(\"%%d\", ...)")
+}
+
+func TestGoCLI_AC2_FloatFlag_Stringified(t *testing.T) {
+	// Float flags via fmt.Sprintf("%g", val).
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The threshold float flag must be stringified using Sprintf("%g", ...).
+	assert.Regexp(t, `Sprintf\("%g".*[Tt]hreshold`, content,
+		"float flag 'threshold' must be stringified via fmt.Sprintf(\"%%g\", ...)")
+}
+
+func TestGoCLI_AC2_ArrayFlag_RepeatedPairs(t *testing.T) {
+	// Array flags: each element emits a separate --flag element pair.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The tags (string[]) flag must iterate and emit --tags for each element.
+	// Look for a range loop that appends --tags per element.
+	assert.Regexp(t, `range\s+.*[Tt]ags`, content,
+		"string[] flag 'tags' must iterate elements to emit repeated --tags pairs")
+	assert.Contains(t, content, `"--tags"`,
+		"string[] flag must emit '--tags' flag name for each element")
+}
+
+func TestGoCLI_AC2_IntArrayFlag_RepeatedStringifiedPairs(t *testing.T) {
+	// int[] array flags: each element stringified and emitted as --flag value.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The counts (int[]) flag must iterate and emit --counts per element.
+	assert.Contains(t, content, `"--counts"`,
+		"int[] flag must emit '--counts' flag name for each element")
+}
+
+func TestGoCLI_AC2_ObjectFlag_JsonString(t *testing.T) {
+	// Object flags emit --flag json_string.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The config (object) flag must be passed as --config <json_string>.
+	assert.Contains(t, content, `"--config"`,
+		"object flag must emit '--config' in cliArgs")
+}
+
+func TestGoCLI_AC2_TokenAppendedLast(t *testing.T) {
+	// Auth token last as --{tokenFlag} {token}. TokenFlag stored WITHOUT --.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The token must be appended to cliArgs after all other args/flags.
+	// The token flag name (api-key) must appear in the cliArgs section.
+	assert.Contains(t, content, `"--api-key"`,
+		"token flag must appear as '--api-key' in cliArgs")
+
+	// Verify token append comes after other flags. Find --config (last
+	// non-token flag) and --api-key (token flag).
+	configIdx := strings.Index(content, `"--config"`)
+	tokenIdx := strings.Index(content, `"--api-key"`)
+	if configIdx != -1 && tokenIdx != -1 {
+		assert.Greater(t, tokenIdx, configIdx,
+			"token flag '--api-key' must appear after last regular flag '--config' in cliArgs")
+	}
+}
+
+func TestGoCLI_AC2_NoAuthTool_NoTokenInArgs(t *testing.T) {
+	// No token arg when HasAuth == false.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "noauth-wiring",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "simple-run",
+				Entrypoint: "./simple.sh",
+				Auth:       &manifest.Auth{Type: "none"},
+				Args: []manifest.Arg{
+					{Name: "input", Type: "string", Required: true, Description: "Input file"},
+				},
+				Flags: []manifest.Flag{
+					{Name: "verbose", Type: "bool", Required: false, Description: "Verbose output"},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/simple-run.go")
+
+	// Must use entrypoint, not echo.
+	assert.Contains(t, content, "./simple.sh",
+		"no-auth tool must still use its entrypoint")
+	assert.NotContains(t, content, `"echo"`,
+		"no-auth tool must not use echo stub")
+	// Must NOT have any token-related cliArgs.
+	assert.NotContains(t, content, "--token",
+		"no-auth tool must not append --token to cliArgs")
+	assert.NotContains(t, content, "--api-key",
+		"no-auth tool must not append --api-key to cliArgs")
+}
+
+func TestGoCLI_AC2_IntFlag_ZeroValueStillPassed(t *testing.T) {
+	// Zero-value int/float still passed (unlike string which is omitted).
+	// This means no conditional check for int == 0 or float == 0.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "zero-val-toolkit",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "zero-tool",
+				Entrypoint: "./zero.sh",
+				Auth:       &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{Name: "count", Type: "int", Required: false, Default: 0, Description: "A count"},
+					{Name: "weight", Type: "float", Required: false, Default: 0.0, Description: "A weight"},
+					{Name: "name", Type: "string", Required: false, Description: "A name"},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/zero-tool.go")
+
+	// Int/float flags must NOT have an "if != 0" guard; they are always passed.
+	// String flags DO have an "if != ''" guard.
+	assert.NotRegexp(t, `if\s+.*[Cc]ount\s*!=\s*0`, content,
+		"int flag 'count' must NOT be conditionally omitted at zero value")
+	assert.NotRegexp(t, `if\s+.*[Ww]eight\s*!=\s*0`, content,
+		"float flag 'weight' must NOT be conditionally omitted at zero value")
+	// But string flag MUST have a guard.
+	assert.Regexp(t, `if\s+.*[Nn]ame\s*!=\s*""`, content,
+		"string flag 'name' must be conditionally omitted when empty")
+}
+
+func TestGoCLI_AC2_CliArgsPassedToExecCommand(t *testing.T) {
+	// The cliArgs slice must actually be passed to exec.CommandContext,
+	// not just built and ignored.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// exec.CommandContext takes (ctx, name, arg...) — the cliArgs must be
+	// spread via the entrypoint variable.
+	assert.Regexp(t, `CommandContext\([^,]+,\s*entrypoint[^)]*cliArgs`, content,
+		"cliArgs must be passed to exec.CommandContext via entrypoint variable (e.g., entrypoint, cliArgs...)")
+}
+
+func TestGoCLI_AC2_MultiplePositionalArgs_InOrder(t *testing.T) {
+	// When a tool has multiple positional args, they must appear in
+	// definition order (job-name before priority).
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// Both arg variables must be appended to cliArgs.
+	jobNameIdx := strings.Index(content, "argJobName")
+	priorityIdx := strings.Index(content, "argPriority")
+	assert.NotEqual(t, -1, jobNameIdx,
+		"positional arg 'argJobName' must be referenced in cliArgs construction")
+	assert.NotEqual(t, -1, priorityIdx,
+		"positional arg 'argPriority' must be referenced in cliArgs construction")
+	// job-name before priority.
+	assert.Less(t, jobNameIdx, priorityIdx,
+		"positional args must appear in definition order: job-name before priority")
+}
+
+func TestGoCLI_AC2_EntrypointPerTool_NotShared(t *testing.T) {
+	// When a manifest has multiple tools with different entrypoints, each
+	// tool command file must use its own entrypoint.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "multi-ep-toolkit",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "alpha",
+				Entrypoint: "/bin/alpha-runner",
+				Auth:       &manifest.Auth{Type: "none"},
+			},
+			{
+				Name:       "bravo",
+				Entrypoint: "/bin/bravo-runner",
+				Auth:       &manifest.Auth{Type: "none"},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+
+	alphaContent := fileContent(t, files, "internal/commands/alpha.go")
+	bravoContent := fileContent(t, files, "internal/commands/bravo.go")
+
+	// alpha.go must use alpha-runner and NOT bravo-runner.
+	assert.Contains(t, alphaContent, "/bin/alpha-runner",
+		"alpha.go must use alpha's entrypoint")
+	assert.NotContains(t, alphaContent, "/bin/bravo-runner",
+		"alpha.go must not use bravo's entrypoint")
+
+	// bravo.go must use bravo-runner and NOT alpha-runner.
+	assert.Contains(t, bravoContent, "/bin/bravo-runner",
+		"bravo.go must use bravo's entrypoint")
+	assert.NotContains(t, bravoContent, "/bin/alpha-runner",
+		"bravo.go must not use alpha's entrypoint")
+
+	// Neither should use echo.
+	assert.NotContains(t, alphaContent, `"echo"`,
+		"alpha.go must not use echo stub")
+	assert.NotContains(t, bravoContent, `"echo"`,
+		"bravo.go must not use echo stub")
+}
+
+// ---------------------------------------------------------------------------
+// Task 1 — AC6.1: No token values in string literals
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_AC6_1_NoTokenLiteralInExecArgs(t *testing.T) {
+	// Generated CLI code must NOT embed token values in string literals.
+	// The token must be passed via a variable, not hardcoded.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// The cliArgs construction must reference the token variable, not a literal.
+	// Looking for the pattern: token variable used as the arg value.
+	assert.Regexp(t, `"--api-key"[^"]*token`, content,
+		"token must be passed via variable (e.g., token), not as a string literal")
+}
+
+// ---------------------------------------------------------------------------
+// Task 1 — Cross-cutting: existing manifests still work with entrypoint
+// ---------------------------------------------------------------------------
+
+func TestGoCLI_AC1_ExistingManifests_UseEntrypoint(t *testing.T) {
+	// All existing test manifests with non-empty entrypoints must now
+	// generate exec.CommandContext with that entrypoint, not "echo".
+	tests := []struct {
+		name     string
+		manifest manifest.Toolkit
+		toolFile string
+		wantEP   string
+	}{
+		{
+			name:     "manifestTwoToolsMixed/status",
+			manifest: manifestTwoToolsMixed(),
+			toolFile: "internal/commands/status.go",
+			wantEP:   "./status.sh",
+		},
+		{
+			name:     "manifestTwoToolsMixed/deploy",
+			manifest: manifestTwoToolsMixed(),
+			toolFile: "internal/commands/deploy.go",
+			wantEP:   "./deploy.sh",
+		},
+		{
+			name:     "manifestAllAuthNone/ping",
+			manifest: manifestAllAuthNone(),
+			toolFile: "internal/commands/ping.go",
+			wantEP:   "./ping.sh",
+		},
+		{
+			name:     "manifestWithArgsAndFlags/upload",
+			manifest: manifestWithArgsAndFlags(),
+			toolFile: "internal/commands/upload.go",
+			wantEP:   "./upload.sh",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			files := generateCLI(t, tc.manifest)
+			content := fileContent(t, files, tc.toolFile)
+			assert.Contains(t, content, tc.wantEP,
+				"generated code must contain entrypoint %q", tc.wantEP)
+			assert.NotContains(t, content, `"echo"`,
+				"generated code must not use echo stub")
+		})
+	}
+}
+
+func TestGoCLI_AC1_BinaryOutputTool_UsesEntrypoint(t *testing.T) {
+	// Binary output tools also have the echo stub — they must use entrypoint too.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "bin-toolkit",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:        "image-gen",
+				Description: "Generate an image",
+				Entrypoint:  "./image-gen.sh",
+				Auth:        &manifest.Auth{Type: "none"},
+				Output:      manifest.Output{Format: "binary"},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/image-gen.go")
+
+	// The binary output path also has exec.CommandContext — it must use the
+	// real entrypoint.
+	assert.Contains(t, content, "./image-gen.sh",
+		"binary output tool must use entrypoint, not echo")
+	assert.NotContains(t, content, `"echo"`,
+		"binary output tool must not use echo stub")
+}
+
+func TestGoCLI_AC2_ObjectArrayFlag_JsonInCliArgs(t *testing.T) {
+	// object[] flags pass --flag json_string (same as object).
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "objarray-cli",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "batch",
+				Entrypoint: "./batch.sh",
+				Auth:       &manifest.Auth{Type: "none"},
+				Flags: []manifest.Flag{
+					{Name: "items", Type: "object[]", Description: "Batch items"},
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/batch.go")
+
+	// The object[] flag must appear in cliArgs as --items <json_string>.
+	assert.Contains(t, content, `"--items"`,
+		"object[] flag must emit '--items' in cliArgs")
+	assert.NotContains(t, content, `"echo"`,
+		"tool must not use echo stub")
+}
+
+func TestGoCLI_AC2_TokenFlagPrefix_NoDoubleDash(t *testing.T) {
+	// TokenFlag stored WITHOUT -- prefix. The cliArgs construction must add
+	// the -- prefix when building the arg. This tests that the TrimPrefix
+	// at buildToolData (line ~391) works correctly with cliArgs.
+	m := manifest.Toolkit{
+		APIVersion: "toolwright/v1",
+		Kind:       "Toolkit",
+		Metadata: manifest.Metadata{
+			Name:    "prefix-test",
+			Version: "1.0.0",
+		},
+		Tools: []manifest.Tool{
+			{
+				Name:       "authtool",
+				Entrypoint: "./auth.sh",
+				Auth: &manifest.Auth{
+					Type:      "token",
+					TokenEnv:  "AUTH_TOKEN",
+					TokenFlag: "--secret-key",
+				},
+			},
+		},
+	}
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/authtool.go")
+
+	// TokenFlag is stored as "secret-key" (TrimPrefix removes --).
+	// The cliArgs must emit "--secret-key", not "----secret-key".
+	assert.Contains(t, content, `"--secret-key"`,
+		"cliArgs must emit --secret-key (single -- prefix)")
+	assert.NotContains(t, content, `"----secret-key"`,
+		"cliArgs must not double the -- prefix on TokenFlag")
+}
+
+func TestGoCLI_AC2_ArgsAndFlags_CompleteIntegration(t *testing.T) {
+	// Integration-level test: a tool with args, various flag types, and auth
+	// must produce generated code containing all the expected cliArgs pieces.
+	files := generateCLI(t, manifestEntrypointWiring())
+	content := fileContent(t, files, "internal/commands/run-job.go")
+
+	// Entrypoint, not echo.
+	assert.Contains(t, content, "/usr/local/bin/run-job",
+		"must use real entrypoint")
+	assert.NotContains(t, content, `"echo"`,
+		"must not use echo")
+
+	// cliArgs must exist.
+	assert.Contains(t, content, "cliArgs",
+		"must build cliArgs slice")
+
+	// Positional args referenced.
+	assert.Contains(t, content, "argJobName",
+		"must reference positional arg job-name")
+
+	// All flags referenced.
+	for _, flag := range []string{"--verbose", "--retries", "--threshold", "--label", "--tags", "--counts", "--config"} {
+		assert.Contains(t, content, flag,
+			"must reference flag %q in cliArgs", flag)
+	}
+
+	// Token last.
+	assert.Contains(t, content, `"--api-key"`,
+		"must include token flag in cliArgs")
+}

@@ -1012,3 +1012,334 @@ func TestIntegration_AllGeneratedFilesNonEmpty(t *testing.T) {
 			"TS MCP file %q must not be empty", f.Path)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// AC5.3: CLI generated code uses entrypoints, not echo stubs
+//
+// Every tool file must invoke exec.CommandContext with the tool's manifest
+// entrypoint, not a placeholder like "echo". This catches regressions where
+// the template falls back to stub behavior instead of wiring the real
+// entrypoint.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_GoCLI_EntrypointNotEcho(t *testing.T) {
+	m := integrationManifest()
+	files := generateCLI(t, m)
+
+	toolFiles := map[string]string{
+		"internal/commands/check-health.go":  "./health.sh",
+		"internal/commands/deploy-app.go":    "./deploy.sh",
+		"internal/commands/fetch-secrets.go": "./secrets.sh",
+	}
+
+	for path, entrypoint := range toolFiles {
+		content := fileContent(t, files, path)
+
+		// Must contain the exact entrypoint string from the manifest
+		assert.Contains(t, content, entrypoint,
+			"%s must contain its manifest entrypoint %q", path, entrypoint)
+
+		// Must NOT use "echo" as the executable (stub pattern)
+		assert.NotContains(t, content, `"echo"`,
+			"%s must not use \"echo\" as stub executable", path)
+
+		// Must use exec.CommandContext (the real execution path)
+		assert.Contains(t, content, "exec.CommandContext",
+			"%s must use exec.CommandContext to invoke the entrypoint", path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC5.3: MCP generated code uses execFile, not TODO stubs
+//
+// Every tool file must use execFile with its manifest entrypoint. No TODO
+// stubs should remain in the generated output.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_TSMCP_EntrypointNotTODO(t *testing.T) {
+	m := integrationManifest()
+	files := generateTSMCP(t, m)
+
+	toolFiles := map[string]string{
+		"src/tools/check-health.ts":  "./health.sh",
+		"src/tools/deploy-app.ts":    "./deploy.sh",
+		"src/tools/fetch-secrets.ts": "./secrets.sh",
+	}
+
+	for path, entrypoint := range toolFiles {
+		content := fileContent(t, files, path)
+
+		// Must contain the exact entrypoint string from the manifest
+		assert.Contains(t, content, entrypoint,
+			"%s must contain its manifest entrypoint %q", path, entrypoint)
+
+		// Must NOT contain TODO stub comments
+		assert.NotContains(t, content, "// TODO: implement",
+			"%s must not contain TODO implementation stubs", path)
+
+		// Must use execFile (the real execution mechanism)
+		assert.Contains(t, content, "await execFile(",
+			"%s must use await execFile() to invoke the entrypoint", path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC5: CLI code has cliArgs construction for entrypoint invocation
+//
+// All tool files must build a cliArgs slice that is passed to the entrypoint.
+// This catches a lazy implementation that calls exec.Command with no arguments.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_GoCLI_CliArgsConstruction(t *testing.T) {
+	m := integrationManifest()
+	files := generateCLI(t, m)
+
+	toolFiles := []string{
+		"internal/commands/check-health.go",
+		"internal/commands/deploy-app.go",
+		"internal/commands/fetch-secrets.go",
+	}
+
+	for _, path := range toolFiles {
+		content := fileContent(t, files, path)
+
+		// Must declare the cliArgs variable
+		assert.Contains(t, content, "cliArgs",
+			"%s must build a cliArgs slice for entrypoint invocation", path)
+
+		// Must use cliArgs in the exec.CommandContext call (not an empty call)
+		assert.Contains(t, content, "cliArgs...",
+			"%s must spread cliArgs into exec.CommandContext", path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC5: MCP code has args construction for entrypoint invocation
+//
+// All tool files must declare const args: string[] and pass it to execFile.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_TSMCP_ArgsConstruction(t *testing.T) {
+	m := integrationManifest()
+	files := generateTSMCP(t, m)
+
+	toolFiles := []string{
+		"src/tools/check-health.ts",
+		"src/tools/deploy-app.ts",
+		"src/tools/fetch-secrets.ts",
+	}
+
+	for _, path := range toolFiles {
+		content := fileContent(t, files, path)
+
+		// Must declare the args array
+		assert.Contains(t, content, "const args: string[]",
+			"%s must declare a typed args array for entrypoint invocation", path)
+
+		// Must push positional args (all tools have at least one arg)
+		assert.Contains(t, content, "args.push(",
+			"%s must push arguments into the args array", path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC5: CLI token tool passes --token in cliArgs
+//
+// deploy-app has auth:token with TokenFlag "--token". The generated code must
+// append "--token" and the resolved token value to cliArgs so the entrypoint
+// receives the token via CLI flag (constitution rule 24).
+// ---------------------------------------------------------------------------
+
+func TestIntegration_GoCLI_TokenInCliArgs(t *testing.T) {
+	m := integrationManifest()
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/deploy-app.go")
+
+	// Must pass --token as a flag in cliArgs (not just declare the token var)
+	assert.Contains(t, content, `"--token"`,
+		"deploy-app must pass --token flag in cliArgs for entrypoint invocation")
+
+	// Must also reference the token variable in the cliArgs append
+	assert.Contains(t, content, "token",
+		"deploy-app must include the resolved token value in cliArgs")
+
+	// The token flag must be appended to cliArgs, not just used in cobra flags
+	assert.Regexp(t, `cliArgs\s*=\s*append\(cliArgs.*"--token"`, content,
+		"deploy-app must append --token to cliArgs for the entrypoint")
+}
+
+// ---------------------------------------------------------------------------
+// AC5: MCP token tool passes --token in args and reads token from env
+//
+// deploy-app has auth:token with TokenEnv "DEPLOY_TOKEN" and
+// TokenFlag "--token". The MCP handler must read the env var and pass
+// the token via --token flag to the entrypoint.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_TSMCP_TokenInArgs(t *testing.T) {
+	m := integrationManifest()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/deploy-app.ts")
+
+	// Must read the token from the environment variable
+	assert.Contains(t, content, "DEPLOY_TOKEN",
+		"deploy-app.ts must reference the DEPLOY_TOKEN env var")
+	assert.Contains(t, content, "envToken",
+		"deploy-app.ts must store env token in envToken variable")
+
+	// Must pass --token flag in args for the entrypoint
+	assert.Contains(t, content, `"--token"`,
+		"deploy-app.ts must pass --token flag in args for the entrypoint")
+
+	// Must push the token into args (not just read it)
+	assert.Contains(t, content, "args.push(",
+		"deploy-app.ts must push --token and envToken into args")
+}
+
+// ---------------------------------------------------------------------------
+// AC6: CLI no-auth tool doesn't reference --token in cliArgs
+//
+// check-health has auth:none. Its generated code must not inject any
+// token-related arguments into cliArgs — the entrypoint should not
+// receive credentials it doesn't need.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_GoCLI_NoAuthTool_NoTokenInCliArgs(t *testing.T) {
+	m := integrationManifest()
+	files := generateCLI(t, m)
+	content := fileContent(t, files, "internal/commands/check-health.go")
+
+	// Must NOT contain --token in the generated code at all
+	assert.NotContains(t, content, `"--token"`,
+		"check-health (auth:none) must not pass --token flag")
+
+	// Must NOT reference DEPLOY_TOKEN (that belongs to deploy-app)
+	assert.NotContains(t, content, "DEPLOY_TOKEN",
+		"check-health (auth:none) must not reference DEPLOY_TOKEN")
+
+	// Must NOT have token resolution code
+	assert.NotContains(t, content, "os.Getenv",
+		"check-health (auth:none) must not call os.Getenv for token resolution")
+}
+
+// ---------------------------------------------------------------------------
+// AC6: MCP no-auth tool doesn't reference tokens in args
+//
+// check-health (auth:none) must not have any token-related argument pushing.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_TSMCP_NoAuthTool_NoTokenInArgs(t *testing.T) {
+	m := integrationManifest()
+	files := generateTSMCP(t, m)
+	content := fileContent(t, files, "src/tools/check-health.ts")
+
+	// Must NOT contain --token flag
+	assert.NotContains(t, content, `"--token"`,
+		"check-health.ts (auth:none) must not pass --token flag")
+
+	// Must NOT reference DEPLOY_TOKEN
+	assert.NotContains(t, content, "DEPLOY_TOKEN",
+		"check-health.ts (auth:none) must not reference DEPLOY_TOKEN")
+
+	// Must NOT have envToken variable
+	assert.NotContains(t, content, "envToken",
+		"check-health.ts (auth:none) must not have an envToken variable")
+}
+
+// ---------------------------------------------------------------------------
+// AC5: Entrypoint values match manifest exactly per tool
+//
+// This verifies that each tool gets its OWN entrypoint, not a copy of another
+// tool's entrypoint. Catches a template bug where all tools share the same
+// entrypoint value.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_GoCLI_EntrypointMatchesManifestPerTool(t *testing.T) {
+	m := integrationManifest()
+	files := generateCLI(t, m)
+
+	// Each tool must contain ONLY its own entrypoint, not other tools' entrypoints.
+	healthContent := fileContent(t, files, "internal/commands/check-health.go")
+	deployContent := fileContent(t, files, "internal/commands/deploy-app.go")
+	secretsContent := fileContent(t, files, "internal/commands/fetch-secrets.go")
+
+	// check-health -> ./health.sh only
+	assert.Contains(t, healthContent, "./health.sh")
+	assert.NotContains(t, healthContent, "./deploy.sh",
+		"check-health.go must not contain deploy-app's entrypoint")
+	assert.NotContains(t, healthContent, "./secrets.sh",
+		"check-health.go must not contain fetch-secrets' entrypoint")
+
+	// deploy-app -> ./deploy.sh only
+	assert.Contains(t, deployContent, "./deploy.sh")
+	assert.NotContains(t, deployContent, "./health.sh",
+		"deploy-app.go must not contain check-health's entrypoint")
+	assert.NotContains(t, deployContent, "./secrets.sh",
+		"deploy-app.go must not contain fetch-secrets' entrypoint")
+
+	// fetch-secrets -> ./secrets.sh only
+	assert.Contains(t, secretsContent, "./secrets.sh")
+	assert.NotContains(t, secretsContent, "./health.sh",
+		"fetch-secrets.go must not contain check-health's entrypoint")
+	assert.NotContains(t, secretsContent, "./deploy.sh",
+		"fetch-secrets.go must not contain deploy-app's entrypoint")
+}
+
+// ---------------------------------------------------------------------------
+// AC5: TS MCP entrypoint values match manifest exactly per tool
+// ---------------------------------------------------------------------------
+
+func TestIntegration_TSMCP_EntrypointMatchesManifestPerTool(t *testing.T) {
+	m := integrationManifest()
+	files := generateTSMCP(t, m)
+
+	healthContent := fileContent(t, files, "src/tools/check-health.ts")
+	deployContent := fileContent(t, files, "src/tools/deploy-app.ts")
+	secretsContent := fileContent(t, files, "src/tools/fetch-secrets.ts")
+
+	// check-health -> ./health.sh only
+	assert.Contains(t, healthContent, "./health.sh")
+	assert.NotContains(t, healthContent, "./deploy.sh",
+		"check-health.ts must not contain deploy-app's entrypoint")
+	assert.NotContains(t, healthContent, "./secrets.sh",
+		"check-health.ts must not contain fetch-secrets' entrypoint")
+
+	// deploy-app -> ./deploy.sh only
+	assert.Contains(t, deployContent, "./deploy.sh")
+	assert.NotContains(t, deployContent, "./health.sh",
+		"deploy-app.ts must not contain check-health's entrypoint")
+	assert.NotContains(t, deployContent, "./secrets.sh",
+		"deploy-app.ts must not contain fetch-secrets' entrypoint")
+
+	// fetch-secrets -> ./secrets.sh only
+	assert.Contains(t, secretsContent, "./secrets.sh")
+	assert.NotContains(t, secretsContent, "./health.sh",
+		"fetch-secrets.ts must not contain check-health's entrypoint")
+	assert.NotContains(t, secretsContent, "./deploy.sh",
+		"fetch-secrets.ts must not contain deploy-app's entrypoint")
+}
+
+// ---------------------------------------------------------------------------
+// AC5.4: TS files have balanced braces (basic syntax validity)
+//
+// Catches template rendering bugs that leave unclosed { or } in generated
+// TypeScript files. This is a structural check, not a full parse, but it
+// catches the most common class of template brace-mismatch bugs.
+// ---------------------------------------------------------------------------
+
+func TestIntegration_TSMCP_BalancedBraces(t *testing.T) {
+	m := integrationManifest()
+	files := generateTSMCP(t, m)
+
+	for _, f := range files {
+		if !strings.HasSuffix(f.Path, ".ts") {
+			continue
+		}
+		content := string(f.Content)
+		openBraces := strings.Count(content, "{")
+		closeBraces := strings.Count(content, "}")
+		assert.Equal(t, openBraces, closeBraces,
+			"TS file %q has unbalanced braces: %d open vs %d close",
+			f.Path, openBraces, closeBraces)
+	}
+}

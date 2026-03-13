@@ -199,11 +199,12 @@ type tsArgData struct {
 }
 
 type tsFlagData struct {
-	Name        string
-	TSType      string
-	ZodType     string
-	Required    bool
-	Description string
+	Name         string
+	TSType       string
+	ZodType      string
+	Required     bool
+	Description  string
+	ManifestType string
 }
 
 type tsAnnotations struct {
@@ -221,6 +222,8 @@ type tsToolData struct {
 	HasAuth         bool
 	AuthType        string
 	TokenEnv        string
+	TokenFlag       string
+	Entrypoint      string
 	HasAnnotations  bool
 	Annotations     tsAnnotations
 	Title           string
@@ -478,11 +481,12 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) (tsToolData, error)
 			zodExpr = zodType(f.Type)
 		}
 		flags[i] = tsFlagData{
-			Name:        f.Name,
-			TSType:      tsType(f.Type),
-			ZodType:     zodExpr,
-			Required:    f.Required,
-			Description: f.Description,
+			Name:         f.Name,
+			TSType:       tsType(f.Type),
+			ZodType:      zodExpr,
+			Required:     f.Required,
+			Description:  f.Description,
+			ManifestType: f.Type,
 		}
 	}
 	hasAuth := auth.Type == "token" || auth.Type == "oauth2"
@@ -535,6 +539,8 @@ func buildTSToolData(tool manifest.Tool, auth manifest.Auth) (tsToolData, error)
 		HasAuth:         hasAuth,
 		AuthType:        auth.Type,
 		TokenEnv:        auth.TokenEnv,
+		TokenFlag:       auth.TokenFlag,
+		Entrypoint:      tool.Entrypoint,
 		HasAnnotations:  hasAnnotations,
 		Annotations:     annot,
 		Title:           title,
@@ -675,9 +681,10 @@ export { server };
 
 const tsToolTmpl = `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-{{- if .HasAuth}}
-import { validateRequest } from "../auth/middleware.js";
-{{- end}}
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFile = promisify(execFileCb);
 
 // Tool: {{.ToolName}}
 // Description: {{.Description}}
@@ -713,15 +720,45 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
     throw new Error("auth required: set the {{.TokenEnv | esc}} environment variable");
   }
 {{- end}}
+  // Empty entrypoint guard
+  const entrypoint = "{{.Entrypoint | esc}}";
+  if (!entrypoint) {
+    throw new Error("{{.ToolName | esc}}: entrypoint not configured");
+  }
+  const args: string[] = [];
+  // Positional args first
 {{- range .Args}}
-  const {{.Name}}: {{.TSType}} = input.{{.Name}};
+  args.push(String(input.{{.Name}}));
 {{- end}}
+  // Flags in definition order
 {{- range .Flags}}
-  const {{.Name}}: {{.TSType}} | undefined = input.{{.Name}};
+{{- if eq .ManifestType "bool"}}
+  if (input.{{.Name}} === true) {
+    args.push("--{{.Name}}");
+  }
+{{- else if or (eq .ManifestType "object") (eq .ManifestType "object[]")}}
+  if (input.{{.Name}} !== undefined) {
+    args.push("--{{.Name}}", JSON.stringify(input.{{.Name}}));
+  }
+{{- else if or (eq .ManifestType "string[]") (eq .ManifestType "int[]") (eq .ManifestType "float[]") (eq .ManifestType "bool[]")}}
+  if (input.{{.Name}} !== undefined) {
+    for (const v of input.{{.Name}}) {
+      args.push("--{{.Name}}", String(v));
+    }
+  }
+{{- else}}
+  if (input.{{.Name}} !== undefined) {
+    args.push("--{{.Name}}", String(input.{{.Name}}));
+  }
 {{- end}}
-  // TODO: implement {{.ToolName}} logic
+{{- end}}
+{{- if .HasAuth}}
+  // Auth token last (via CLI flag, constitution rule 24)
+  args.push("{{.TokenFlag | esc}}", envToken);
+{{- end}}
+  // Execute the entrypoint
 {{- if .IsBinaryOutput}}
-  const stdout = ""; // TODO: replace with actual binary output
+  const { stdout } = await execFile(entrypoint, args, { encoding: "buffer" });
   const base64Data = Buffer.from(stdout).toString("base64");
 {{- if .IsImageMime}}
   return {
@@ -743,8 +780,9 @@ async function handle_{{.ToolName}}(input: {{.ToolName}}Input): Promise<{ conten
   };
 {{- end}}
 {{- else}}
+  const { stdout } = await execFile(entrypoint, args);
   return {
-    content: [{ type: "text", text: "{{.ToolName | esc}} executed" }],
+    content: [{ type: "text", text: stdout }],
   };
 {{- end}}
 }
